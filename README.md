@@ -11,6 +11,21 @@ Uygulama, **Electron**, **React (v19)** ve **Ant Design (v6)** mimarisi üzerine
 
 ---
 
+## 🔌 Synergy CSP Ara Katman Uygulaması (`Systek_SynergyCSPRelay.zip`)
+
+Bu entegrasyon uygulamasının hedef Synergy CSP ortamı ile haberleşebilmesi ve verileri doğru şekilde yazabilmesi için, hedef ortamda bir ara katman uygulamasının yüklü olması gerekir.
+
+Proje kök dizininde bulunan **`Systek_SynergyCSPRelay.zip`** dosyası, Synergy CSP üzerinde yüklenmesi gereken özel ara katman paketidir.
+
+### 📥 Kurulum Adımları (CSP Tarafı):
+1. Synergy CSP yönetim paneline yönetici hesabı ile giriş yapın.
+2. **Uygulama Yönetimi (Apps)** alanına gidin.
+3. **Uygulama İçe Aktar / Yükle (Import App)** seçeneğini seçin.
+4. Bilgisayarınızdaki `Systek_SynergyCSPRelay.zip` paketini seçerek yüklemeyi tamamlayın.
+5. Uygulamanın yüklendiğini ve `Systek_SynergyCSPRelay` adıyla aktif olduğunu doğrulayın.
+
+---
+
 ## 📌 Öne Çıkan Özellikler
 
 *   ⚡ **Bağımlılık Grafiği Tabanlı Eşzamanlı (Concurrent) Transfer**: Birbirine bağımlı form alanlarını akıllı bir şekilde analiz ederek bağımsız verileri paralel, bağımlı alanları ise sıralı çözen asenkron transfer mimarisi.
@@ -75,29 +90,9 @@ Oluşturulan kurulum dosyaları `dist/` klasörü altında yer alacaktır.
 
 ---
 
-## 📖 Kullanım Kılavuzu
+## 📖 Kullanım Kılavuzu & Detaylar
 
-### 1. Bağlantı Ekranı
-Uygulama açıldığında ilk olarak bağlanmak istediğiniz **Synergy CSP** ortamının `Domain URL` bilgisini girin.
-
-### 2. Giriş ve Kimlik Doğrulama
-Kullanıcı adı, şifre ve dil seçimini yaparak sisteme giriş yapın. Arka planda güvenli şifrelenmiş kimlik doğrulama tokenları (`bimser-encrypted-data` vb.) otomatik saklanır.
-
-### 3. Proje ve Akış Seçimi
-Aktarım yapmak istediğiniz CSP Projesini ve ardından hedef **Süreci (Flow)** veya **Formu (Form)** seçin.
-
-### 4. Excel Yükleme ve Alan Eşleme
-Excel dosyanızı yükleyin. Sütunların CSP formundaki hangi alanlara karşılık geleceğini (Excel Sütunu, Sabit Değer veya API Sorgusu olarak) yapılandırın.
-
-### 5. İzleme ve Yürütme
-Aktarımı başlatın. Süreç boyunca her bir satırın durumunu (Başarılı, Uyarı, Hata) canlı olarak izleyebilir, detaylı istek/cevap (Payload & Response) ağacını ve diagnostics analizlerini inceleyebilirsiniz.
-
----
-
-## 🔒 Güvenlik ve Performans Notları
-
-*   **Güvenli Alan Yönetimi**: Hassas kimlik bilgileri, arayüz süreçlerinde asla açık olarak loglanmaz ve IndexedDB veritabanında saklanmaz.
-*   **İşlem Sınırlandırması (Concurrency Limit)**: Sunucunun aşırı yük altında kalmasını (rate-limiting) engellemek amacıyla paralel istekler 5'li chunk'lar halinde sınırlandırılmıştır.
+Detaylı parametre yapılandırmaları, veri eşleştirme tipleri (Excel, Sabit, API) ve akış/form parametrelerinin nasıl kurulduğunu öğrenmek için lütfen projedeki **[USER_GUIDE.md](USER_GUIDE.md)** dosyasını inceleyin.
 
 ---
 
