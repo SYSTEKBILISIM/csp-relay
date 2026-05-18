@@ -1,0 +1,48 @@
+.login-card {
+    box-shadow: none !important;
+    text-align: center;
+    background: transparent !important;
+    padding: 0 !important;
+}
+
+.login-card-body {
+    padding: 0 !important;
+}
+
+.login-header-box {
+    margin-bottom: 32px;
+}
+
+.login-title {
+    font-weight: 700 !important;
+    color: #1e293b !important;
+    letter-spacing: -0.5px !important;
+}
+
+.login-subtitle {
+    font-size: 0.9rem !important;
+}
+
+.form-field-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: #475569;
+}
+
+.login-input-rounded {
+    border-radius: 8px !important;
+}
+
+.login-btn-gradient {
+    height: 44px !important;
+    font-weight: 600 !important;
+    border-radius: 8px !important;
+    background: linear-gradient(90deg, #2563eb 0%, #0ea5e9 100%) !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3) !important;
+}
+
+.login-select-popup {
+    border-radius: 12px;
+    padding: 8px;
+}

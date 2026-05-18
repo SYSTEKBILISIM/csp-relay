@@ -1,0 +1,133 @@
+.project-card {
+    box-shadow: none !important;
+    text-align: center;
+    background: transparent !important;
+    padding: 0;
+    margin: 0 auto !important;
+}
+
+/* Purge all pseudo-elements that cause phantom lines */
+.project-card *::before,
+.project-card *::after,
+.project-card::before,
+.project-card::after,
+.motion-container-sm::before,
+.motion-container-sm::after {
+    display: none !important;
+    content: none !important;
+    border: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    background: none !important;
+    box-shadow: none !important;
+}
+
+.project-card .ant-form-item-control-input,
+.project-card .ant-form-item-label {
+    border: none !important;
+}
+
+.project-card-body {
+    padding: 0 !important;
+}
+
+.project-header {
+    margin-bottom: 24px;
+}
+
+.project-title {
+    font-weight: 700 !important;
+    color: #1e293b !important;
+    letter-spacing: -0.5px !important;
+}
+
+.project-subtitle {
+    font-size: 0.85rem;
+    color: #64748b;
+}
+
+.project-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: #475569;
+    margin-bottom: 4px;
+    display: inline-block;
+}
+
+.project-label-with-icon {
+    font-weight: 600;
+    font-size: 13px;
+    color: #475569;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.project-select {
+    text-align: left;
+    border-radius: 6px;
+    height: 48px;
+}
+
+.project-select-full {
+    width: 100%;
+}
+
+.project-select-icon-default {
+    color: #94a3b8 !important;
+    font-size: 16px;
+    margin-right: 8px !important;
+    transition: all 0.3s ease;
+}
+
+.project-select-icon-active {
+    color: #0ea5e9 !important;
+    font-size: 18px;
+    margin-right: 8px !important;
+    transition: all 0.3s ease;
+}
+
+.project-option-container {
+    display: flex;
+    flex-direction: column;
+}
+
+.project-option-main {
+    font-weight: 500;
+}
+
+.project-option-sub {
+    font-size: 11px;
+    color: #94a3b8;
+}
+
+.project-animated-section {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+.project-dragger-text {
+    font-size: 0.9rem;
+    color: #475569;
+}
+
+.project-submit-btn {
+    height: 44px !important;
+    font-weight: 600 !important;
+    border-radius: 8px !important;
+    background: linear-gradient(90deg, #2563eb 0%, #0ea5e9 100%) !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(37, 99, 235, 0.3) !important;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

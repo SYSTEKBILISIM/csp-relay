@@ -1,0 +1,247 @@
+.transfer-container {
+    box-shadow: none !important;
+    text-align: center;
+    background: transparent !important;
+    padding: 0 !important;
+    height: 100%;
+}
+
+.transfer-container-body {
+    padding: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: calc(100vh - 120px) !important;
+}
+
+.transfer-header {
+    margin-bottom: 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 16px;
+}
+
+.transfer-title-box {
+    text-align: left;
+}
+
+.transfer-title-box h3 {
+    font-weight: 700 !important;
+    color: #1e293b !important;
+    margin-bottom: 0 !important;
+    margin-top: 10px !important;
+}
+
+.transfer-form {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.transfer-form-inner {
+    flex: 1;
+    padding: 0 16px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.top-controls-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    justify-content: space-between;
+    align-items: flex-end;
+    margin-bottom: 16px;
+}
+
+.top-controls-selectors {
+    display: flex;
+    gap: 16px;
+    flex: 1 1 400px;
+    max-width: 800px;
+}
+
+.form-item-label-bold {
+    font-weight: 600;
+}
+
+.mapping-table-card {
+    flex: 1;
+    overflow-y: auto;
+    background: #fff;
+    border-radius: 12px;
+    border: 1px solid #e2e8f0;
+    margin-bottom: 16px;
+}
+
+.submit-btn-large {
+    height: 40px !important;
+    width: 100% !important;
+}
+
+/* Table Overrides */
+.transfer-container .ant-table-body {
+    overflow-y: auto !important;
+    overflow-x: auto !important;
+}
+
+/* These will be injected via JS or just kept as global for this component */
+.drop-row td {
+    border-top: 1px solid #60a5fa !important;
+}
+
+.drag-row-active {
+    cursor: grab;
+    transition: all 0.1s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.fade-in-anim {
+    animation: fadeIn 0.3s;
+}
+
+.table-header-bold {
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.input-sm-fixed {
+    font-size: 11px;
+    height: 22px;
+    padding: 0 6px;
+}
+
+.select-sm-fixed {
+    width: 100%;
+    font-size: 11px;
+    height: 22px;
+}
+
+/* Global compactness for small antd inputs in this screen */
+.ant-input-sm,
+.ant-select-sm .ant-select-selector {
+    height: 32px !important;
+    min-height: 32px !important;
+    padding: 0 10px !important;
+    font-size: 13px !important;
+    display: flex !important;
+    align-items: center !important;
+    box-sizing: border-box !important;
+    border: 1px solid #eef2f6 !important;
+    background: #f8fafc !important;
+    border-radius: 4px !important;
+}
+
+.ant-select-sm .ant-select-selection-item {
+    line-height: normal !important;
+    display: flex !important;
+    align-items: center !important;
+    height: 100% !important;
+}
+
+.ant-table-cell {
+    vertical-align: middle !important;
+}
+
+.ant-form-item {
+    margin-bottom: 0 !important;
+}
+
+/* Ensure Tags in the grid also match the height */
+.ant-table-cell .ant-tag {
+    height: 28px !important;
+    line-height: 26px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+/* Modal Header & Close Button Alignment */
+.ant-modal-header {
+    background: transparent !important;
+    height: 64px !important;
+    padding: 0 24px !important;
+    display: flex !important;
+    align-items: center !important;
+    margin-bottom: 0 !important;
+    border-bottom: 1px solid #f1f5f9 !important;
+}
+
+.ant-modal-close {
+    top: 0 !important;
+    right: 20px !important;
+    height: 64px !important;
+    /* Match header height exactly */
+    width: 32px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin: 0 !important;
+}
+
+.ant-modal-close:hover {
+    background: transparent !important;
+}
+
+.ant-modal-close .ant-modal-close-x {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 32px !important;
+    width: 32px !important;
+    background: #f8fafc !important;
+    border-radius: 8px !important;
+}
+
+.ant-modal-title {
+    line-height: 64px !important;
+    /* Match header height for centering */
+    font-size: 16px !important;
+    font-weight: 600 !important;
+    margin: 0 !important;
+    width: 100%;
+}
+
+.tag-nowrap {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.transfer-container .ant-segmented-item {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.definiation-type-column {
+    padding: 14px 10px !important;
+}
+
+.ant-segmented-item {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.ant-select-single .ant-select-selector,
+.ant-input {
+    border-radius: 4px !important;
+}
+
+.ant-modal-container {
+    padding-top: 10px !important;
+}

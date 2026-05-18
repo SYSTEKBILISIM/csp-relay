@@ -1,0 +1,47 @@
+{
+  "name": "csp-relay",
+  "productName": "Synergy CSP Relay",
+  "version": "1.0.0",
+  "description": "Synergy CSP Relay - Transfer Application",
+  "main": "./out/main/index.js",
+  "author": {
+    "name": "ATASEVEN",
+    "url": "https://ataseven.dev"
+  },
+  "build": {
+    "appId": "com.synergy.csprelay",
+    "productName": "Synergy CSP Relay"
+  },
+  "scripts": {
+    "format": "prettier --write .",
+    "lint": "eslint . --ext .js,.jsx,.cjs,.mjs,.ts,.tsx,.vue --fix",
+    "start": "electron-vite preview",
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "postinstall": "electron-builder install-app-deps",
+    "build:unpack": "npm run build && electron-builder --dir",
+    "build:win": "npm run build && electron-builder --win",
+    "build:mac": "npm run build && electron-builder --mac",
+    "build:linux": "npm run build && electron-builder --linux"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron-toolkit/utils": "^3.0.0",
+    "@vitejs/plugin-react": "^5.1.2",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.7.0",
+    "electron-vite": "^3.1.0",
+    "vite": "^6.4.1"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "antd": "^6.1.1",
+    "framer-motion": "^12.23.26",
+    "mime-types": "^3.0.2",
+    "monaco-editor": "^0.53.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-resizable": "^3.1.3",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
+  }
+}
