@@ -116,9 +116,12 @@ async function submitRelatedGridRow(projectName, formName, formFields, globalSto
 /**
  * Helper: Resolve a single value mapping (Excel or API)
  */
-async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog = [], warnings = [], fieldName = '') {
+async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog = [], warnings = [], fieldName = '', systemSettings = {}) {
     let finalValue = null;
     let finalText = '';
+
+    const apiMatchThreshold = systemSettings.apiMatchThreshold !== undefined ? systemSettings.apiMatchThreshold : 0.9;
+    const apiCacheLimit = systemSettings.apiCacheLimit !== undefined ? systemSettings.apiCacheLimit : 50;
 
     if (!mapping) return { Value: null, Text: '' };
 
@@ -303,10 +306,12 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
                     };
 
                     // PREVENT MEMORY LEAK: Limit apiCache size with Map
-                    if (apiCache.size > 50) {
+                    if (apiCache.size > apiCacheLimit) {
                         const keysIter = apiCache.keys();
-                        for (let i = 0; i < 10; i++) {
-                            apiCache.delete(keysIter.next().value);
+                        const deleteCount = Math.max(1, Math.round(apiCacheLimit * 0.2)); // delete 20% of entries
+                        for (let i = 0; i < deleteCount; i++) {
+                            const nextKey = keysIter.next().value;
+                            if (nextKey !== undefined) apiCache.delete(nextKey);
                         }
                     }
                 }
@@ -338,8 +343,8 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
             }
         }
 
-        // Apply Threshold: 90% similarity required to consider it a match
-        if (bestMatch && maxSimilarity >= 0.9) {
+        // Apply Threshold
+        if (bestMatch && maxSimilarity >= apiMatchThreshold) {
             // 1. Resolve Value Field (Supports Template or Path for backward compatibility)
             const valTemplate = mapping.valuePath || '{{id}}';
             let rawValue = '';
@@ -399,6 +404,21 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
     let payload = null;
     let loginAsValue = null;
 
+    // Extract System Settings with fallback defaults
+    const apiMatchThreshold = definitionData?.apiMatchThreshold !== undefined 
+        ? definitionData.apiMatchThreshold 
+        : (globalStore?.get('apiMatchThreshold') !== undefined ? globalStore.get('apiMatchThreshold') : 0.9);
+
+    const apiCacheLimit = definitionData?.apiCacheLimit !== undefined 
+        ? definitionData.apiCacheLimit 
+        : (globalStore?.get('apiCacheLimit') !== undefined ? globalStore.get('apiCacheLimit') : 50);
+
+    const relatedGridChunkSize = definitionData?.relatedGridChunkSize !== undefined 
+        ? definitionData.relatedGridChunkSize 
+        : (globalStore?.get('relatedGridChunkSize') !== undefined ? globalStore.get('relatedGridChunkSize') : 5);
+
+    const systemSettings = { apiMatchThreshold, apiCacheLimit, relatedGridChunkSize };
+
     try {
         executionLog.push({ key: `init_${Date.now()}_${Math.random()}`, step: 'Initialize', details: 'Row parsing started', status: 'Success' });
 
@@ -441,9 +461,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         const nestedRows = await resolveGridRows(colType, colDef.mapping, gridRow[colDef.mapping?.masterKey]);
 
                         if (colType === 'RelatedGrid') {
-                            const submittedRowRefs = [];
-                            const chunkSize = 5;
-                            for (let i = 0; i < nestedRows.length; i += chunkSize) {
+                        const chunkSize = relatedGridChunkSize;
+                        for (let i = 0; i < nestedRows.length; i += chunkSize) {
                                 const chunk = nestedRows.slice(i, i + chunkSize);
                                 const results = await Promise.all(chunk.map(async (nestedRow) => {
                                     try {
@@ -509,7 +528,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     }
 
                     // Standard value resolution
-                    const result = await resolveMappedValue(colDef.mapping, gridRow, globalStore, apiCache, rowContext, executionLog, warnings, colDef.name);
+                    const result = await resolveMappedValue(colDef.mapping, gridRow, globalStore, apiCache, rowContext, executionLog, warnings, colDef.name, systemSettings);
 
                     // Add to rowContext so subsequent columns in the grid row can use it
                     rowContext[colDef.name] = result;
@@ -605,7 +624,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                             resolved[p.key] = [];
                         }
                     } else {
-                        const res = await resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog, warnings, p.key);
+                        const res = await resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog, warnings, p.key, systemSettings);
                         resolved[p.key] = res.Value !== null ? res.Value : res.Text;
                     }
                 }
@@ -661,8 +680,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     if (masterCol) {
                         const masterValue = rowData[masterCol];
                         const resolvedRows = await resolveGridRows(type, mapping, masterValue);
-                        const submittedRowRefs = [];
-                        const chunkSize = 5;
+                        const chunkSize = relatedGridChunkSize;
                         for (let i = 0; i < resolvedRows.length; i += chunkSize) {
                             const chunk = resolvedRows.slice(i, i + chunkSize);
                             const results = await Promise.all(chunk.map(async (rRow) => {
@@ -719,7 +737,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         }
                     }
                 } else {
-                    const result = await resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog, warnings, def.name);
+                    const result = await resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog, warnings, def.name, systemSettings);
                     objectContext[def.name] = result;
                     rowObj = { FieldName: def.name, Value: result.Value, Text: result.Text, Type: 'Object' };
                 }

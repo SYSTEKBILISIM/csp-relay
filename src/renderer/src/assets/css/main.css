@@ -472,3 +472,31 @@ td.ant-table-cell:has(.ant-empty-description) {
     cursor: not-allowed !important;
     opacity: 0.9 !important;
 }
+
+/* Flexible Height support for Log Details Tabs */
+.log-details-tabs,
+.log-details-tabs .ant-tabs-content-holder,
+.log-details-tabs .ant-tabs-content,
+.log-details-tabs .ant-tabs-tabpane {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.log-details-tabs .ant-table-wrapper,
+.log-details-tabs .ant-spin-nested-loading,
+.log-details-tabs .ant-spin-container,
+.log-details-tabs .ant-table,
+.log-details-tabs .ant-table-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.log-details-tabs .ant-table-body {
+    flex: 1;
+    overflow-y: auto !important;
+}

@@ -342,6 +342,127 @@ export const ParametersModal = ({ visible, onCancel, onSave, initialValues, exce
                                         </div>
                                     </div>
                                 )
+                            },
+                            {
+                                key: '4',
+                                label: 'System Settings',
+                                children: (
+                                    <div style={{ height: '400px', padding: 24, overflowY: 'auto' }}>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                                            <div style={{ 
+                                                padding: '12px 16px', 
+                                                background: '#f8fafc', 
+                                                borderRadius: 10, 
+                                                border: '1px solid #e2e8f0',
+                                                display: 'flex',
+                                                gap: 12
+                                            }}>
+                                                <InfoCircleFilled style={{ color: '#64748b', fontSize: 14, marginTop: 2 }} />
+                                                <Text type="secondary" style={{ fontSize: 13, color: '#334155', lineHeight: '1.5' }}>
+                                                    Configure global system parameters, execution thresholds, and limits for the transfer process.
+                                                </Text>
+                                            </div>
+
+                                            {/* API Match Threshold Slider / Selector */}
+                                            <div style={{
+                                                background: '#fff',
+                                                borderRadius: '12px',
+                                                border: '1px solid #f1f5f9',
+                                                boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+                                                padding: '16px 20px'
+                                            }}>
+                                                <div style={{ marginBottom: 12 }}>
+                                                    <Text strong style={{ fontSize: 14, color: '#1e293b' }}>API Value Match Threshold</Text>
+                                                    <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 2 }}>
+                                                        Minimum similarity ratio required for fuzzy search field lookups.
+                                                    </Text>
+                                                </div>
+                                                <Form.Item
+                                                    name="apiMatchThreshold"
+                                                    initialValue={0.9}
+                                                    style={{ marginBottom: 0 }}
+                                                >
+                                                    <Select
+                                                        style={{ width: '100%' }}
+                                                        options={[
+                                                            { label: '100% (Exact Matches Only)', value: 1.0 },
+                                                            { label: '95% (Highly Restrictive Similarity)', value: 0.95 },
+                                                            { label: '90% (Recommended Default)', value: 0.90 },
+                                                            { label: '85% (Standard Fuzzy)', value: 0.85 },
+                                                            { label: '80% (Moderate Similarity)', value: 0.80 },
+                                                            { label: '70% (Highly Permissive Fuzzy)', value: 0.70 },
+                                                            { label: '50% (Extremely Broad Match)', value: 0.50 }
+                                                        ]}
+                                                    />
+                                                </Form.Item>
+                                            </div>
+
+                                            {/* Concurrent Request Limit for RelatedGrid */}
+                                            <div style={{
+                                                background: '#fff',
+                                                borderRadius: '12px',
+                                                border: '1px solid #f1f5f9',
+                                                boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+                                                padding: '16px 20px'
+                                            }}>
+                                                <div style={{ marginBottom: 12 }}>
+                                                    <Text strong style={{ fontSize: 14, color: '#1e293b' }}>Concurrent RelatedGrid Requests</Text>
+                                                    <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 2 }}>
+                                                        Maximum concurrent HTTP request chunk size for related grid rows submission.
+                                                    </Text>
+                                                </div>
+                                                <Form.Item
+                                                    name="relatedGridChunkSize"
+                                                    initialValue={5}
+                                                    style={{ marginBottom: 0 }}
+                                                >
+                                                    <Select
+                                                        style={{ width: '100%' }}
+                                                        options={[
+                                                            { label: '1 (Strictly Sequential)', value: 1 },
+                                                            { label: '3 (Low Traffic Concurrency)', value: 3 },
+                                                            { label: '5 (Recommended Default)', value: 5 },
+                                                            { label: '10 (High Parallel Performance)', value: 10 },
+                                                            { label: '20 (Max Power / High Risk)', value: 20 }
+                                                        ]}
+                                                    />
+                                                </Form.Item>
+                                            </div>
+
+                                            {/* LRU Cache Limit */}
+                                            <div style={{
+                                                background: '#fff',
+                                                borderRadius: '12px',
+                                                border: '1px solid #f1f5f9',
+                                                boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+                                                padding: '16px 20px'
+                                            }}>
+                                                <div style={{ marginBottom: 12 }}>
+                                                    <Text strong style={{ fontSize: 14, color: '#1e293b' }}>API Cache Size Limit</Text>
+                                                    <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 2 }}>
+                                                        Maximum number of unique query results held in session memory.
+                                                    </Text>
+                                                </div>
+                                                <Form.Item
+                                                    name="apiCacheLimit"
+                                                    initialValue={50}
+                                                    style={{ marginBottom: 0 }}
+                                                >
+                                                    <Select
+                                                        style={{ width: '100%' }}
+                                                        options={[
+                                                            { label: '10 (Minimal Footprint Cache)', value: 10 },
+                                                            { label: '25 (Sleek Session Cache)', value: 25 },
+                                                            { label: '50 (Recommended Default)', value: 50 },
+                                                            { label: '100 (Extensive Cache)', value: 100 },
+                                                            { label: '200 (Heavy-load Cache)', value: 200 }
+                                                        ]}
+                                                    />
+                                                </Form.Item>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )
                             }
                         ].filter(Boolean)}
                     />

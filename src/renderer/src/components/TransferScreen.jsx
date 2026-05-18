@@ -65,6 +65,9 @@ export const TransferScreen = ({ onFinish, initialData }) => {
     const [formParams, setFormParams] = useState([]);
     const [loginAsEnabled, setLoginAsEnabled] = useState(false);
     const [loginAsColumn, setLoginAsColumn] = useState(null);
+    const [apiMatchThreshold, setApiMatchThreshold] = useState(0.9);
+    const [apiCacheLimit, setApiCacheLimit] = useState(50);
+    const [relatedGridChunkSize, setRelatedGridChunkSize] = useState(5);
     const [isParamsModalVisible, setIsParamsModalVisible] = useState(false);
     const [draggedOverIndex, setDraggedOverIndex] = useState(-1);
 
@@ -78,6 +81,9 @@ export const TransferScreen = ({ onFinish, initialData }) => {
         setFormParams(values.formParams || []);
         setLoginAsEnabled(values.loginAsEnabled || false);
         setLoginAsColumn(values.loginAsColumn || null);
+        setApiMatchThreshold(values.apiMatchThreshold !== undefined ? values.apiMatchThreshold : 0.9);
+        setApiCacheLimit(values.apiCacheLimit !== undefined ? values.apiCacheLimit : 50);
+        setRelatedGridChunkSize(values.relatedGridChunkSize !== undefined ? values.relatedGridChunkSize : 5);
         setIsParamsModalVisible(false);
     };
 
@@ -132,6 +138,15 @@ export const TransferScreen = ({ onFinish, initialData }) => {
             if (initialData.loginAsColumn) {
                 setLoginAsColumn(initialData.loginAsColumn);
             }
+            if (initialData.apiMatchThreshold !== undefined) {
+                setApiMatchThreshold(initialData.apiMatchThreshold);
+            }
+            if (initialData.apiCacheLimit !== undefined) {
+                setApiCacheLimit(initialData.apiCacheLimit);
+            }
+            if (initialData.relatedGridChunkSize !== undefined) {
+                setRelatedGridChunkSize(initialData.relatedGridChunkSize);
+            }
         } else if (storedSheets.length > 0 && !mainSheet) {
             // Only auto-select if no state exists
             setMainSheet(storedSheets[0]);
@@ -153,7 +168,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
             flowParams,
             formParams,
             loginAsEnabled,
-            loginAsColumn
+            loginAsColumn,
+            apiMatchThreshold,
+            apiCacheLimit,
+            relatedGridChunkSize
         };
         const jsonString = JSON.stringify(data, null, 2);
         const blob = new Blob([jsonString], { type: 'application/json' });
@@ -199,6 +217,9 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                 if (data.formParams) setFormParams(data.formParams);
                 if (data.loginAsEnabled !== undefined) setLoginAsEnabled(data.loginAsEnabled);
                 if (data.loginAsColumn) setLoginAsColumn(data.loginAsColumn);
+                if (data.apiMatchThreshold !== undefined) setApiMatchThreshold(data.apiMatchThreshold);
+                if (data.apiCacheLimit !== undefined) setApiCacheLimit(data.apiCacheLimit);
+                if (data.relatedGridChunkSize !== undefined) setRelatedGridChunkSize(data.relatedGridChunkSize);
 
                 messageApi.success('Configuration imported successfully.');
             } catch (error) {
@@ -364,7 +385,7 @@ export const TransferScreen = ({ onFinish, initialData }) => {
 
     const handleSubmit = (values) => {
         setLoading(true);
-        console.log('Transfer Definition:', { ...values, objects, mainSheet, flowParams, formParams, loginAsEnabled, loginAsColumn });
+        console.log('Transfer Definition:', { ...values, objects, mainSheet, flowParams, formParams, loginAsEnabled, loginAsColumn, apiMatchThreshold, apiCacheLimit, relatedGridChunkSize });
 
         // Save to store
         globalStore.set('mappingMainSheet', mainSheet);
@@ -374,10 +395,13 @@ export const TransferScreen = ({ onFinish, initialData }) => {
         globalStore.set('formParams', formParams);
         globalStore.set('loginAsEnabled', loginAsEnabled);
         globalStore.set('loginAsColumn', loginAsColumn);
+        globalStore.set('apiMatchThreshold', apiMatchThreshold);
+        globalStore.set('apiCacheLimit', apiCacheLimit);
+        globalStore.set('relatedGridChunkSize', relatedGridChunkSize);
 
         setTimeout(() => {
             setLoading(false);
-            if (onFinish) onFinish({ ...values, objects, mainSheet, mainIdColumn, flowParams, formParams, loginAsEnabled, loginAsColumn });
+            if (onFinish) onFinish({ ...values, objects, mainSheet, mainIdColumn, flowParams, formParams, loginAsEnabled, loginAsColumn, apiMatchThreshold, apiCacheLimit, relatedGridChunkSize });
         }, 1000);
     };
 
@@ -564,7 +588,7 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                     visible={isParamsModalVisible}
                     onCancel={() => setIsParamsModalVisible(false)}
                     onSave={handleParamsSave}
-                    initialValues={{ flowParams, formParams, loginAsEnabled, loginAsColumn }}
+                    initialValues={{ flowParams, formParams, loginAsEnabled, loginAsColumn, apiMatchThreshold, apiCacheLimit, relatedGridChunkSize }}
                     excelColumns={mainSheet ? (sheetColumns[mainSheet] || []) : []}
                     constructInternalUrl={constructInternalUrl}
                     sheets={sheets}

@@ -121,12 +121,20 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                 style={{ top: 50 }}
                 styles={{
                     header: { borderBottom: '1px solid #f1f5f9', padding: '16px 24px' },
-                    body: { padding: '8px 24px 24px 24px', maxHeight: 'calc(100vh - 150px)', overflowY: 'hidden' }
+                    body: {
+                        padding: '8px 24px 24px 24px',
+                        height: 'calc(100vh - 180px)',
+                        minHeight: '450px',
+                        maxHeight: '620px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflowY: 'hidden'
+                    }
                 }}
             >
                 {selectedLog && (
-                    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)', minHeight: '450px', maxHeight: '620px' }}>
-                        <div style={{ padding: '20px 24px 10px 24px' }}>
+                    <>
+                        <div style={{ padding: '20px 24px 10px 24px', flexShrink: 0 }}>
                             {selectedLog.warnings && selectedLog.warnings.length > 0 && (
                                 <div style={{ marginBottom: 16, padding: '12px 16px', background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: 10, display: 'flex', gap: 12 }}>
                                     <InfoCircleOutlined style={{ color: '#f59e0b', marginTop: 3 }} />
@@ -159,6 +167,7 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                         <Tabs
                             defaultActiveKey="1"
                             type="card"
+                            className="log-details-tabs"
                             tabBarStyle={{ margin: '0 36px', marginBottom: 0 }}
                             style={{ marginTop: '-12px', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
                             items={[
@@ -166,13 +175,13 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                                     key: '1',
                                     label: <Space><InfoCircleOutlined /> Operation Tree</Space>,
                                     children: (
-                                        <div style={{ height: 'calc(100vh - 400px)', minHeight: '280px', maxHeight: '420px', padding: '0 24px' }}>
+                                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 24px', paddingBottom: 12 }}>
                                             <Table
                                                 dataSource={executionLog}
                                                 rowKey="key"
                                                 pagination={false}
                                                 size="small"
-                                                scroll={{ y: 'calc(100vh - 460px)' }}
+                                                scroll={{ y: '100%' }}
                                                 locale={{ emptyText: <Text type="secondary" italic>No execution logs available for this row.</Text> }}
                                                 columns={[
                                                     {
@@ -215,7 +224,7 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                                                         )
                                                     }
                                                 ]}
-                                                style={{ border: '1px solid #f1f5f9', borderRadius: 12, overflow: 'hidden' }}
+                                                style={{ flex: 1, border: '1px solid #f1f5f9', borderRadius: 12, overflow: 'hidden' }}
                                             />
                                         </div>
                                     )
@@ -224,8 +233,8 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                                     key: '2',
                                     label: <Space><CloudUploadOutlined /> Request Payload</Space>,
                                     children: (
-                                        <div style={{ height: 'calc(100vh - 400px)', minHeight: '280px', maxHeight: '420px', padding: '0 24px' }}>
-                                            <div className="editor-wrapper" style={{ height: '100%', position: 'relative', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+                                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 24px', paddingBottom: 12 }}>
+                                            <div className="editor-wrapper" style={{ flex: 1, position: 'relative', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
                                                 <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
                                                     <CopyAnimatedButton text={selectedLog.details?.payload || selectedLog.payload || ''} />
                                                 </div>
@@ -243,8 +252,8 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                                     key: '3',
                                     label: <Space><CloudDownloadOutlined /> Response Body</Space>,
                                     children: (
-                                        <div style={{ height: 'calc(100vh - 400px)', minHeight: '280px', maxHeight: '420px', padding: '0 24px' }}>
-                                            <div className="editor-wrapper" style={{ height: '100%', position: 'relative', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+                                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 24px', paddingBottom: 12 }}>
+                                            <div className="editor-wrapper" style={{ flex: 1, position: 'relative', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
                                                 <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
                                                     <CopyAnimatedButton text={selectedLog.details?.response || selectedLog.response || ''} />
                                                 </div>
@@ -260,7 +269,7 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                                 }
                             ]}
                         />
-                    </div>
+                    </>
                 )}
             </Modal>
 
@@ -291,22 +300,33 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                 style={{ top: 50 }}
                 styles={{
                     header: { borderBottom: '1px solid #f1f5f9', padding: '16px 24px' },
-                    body: { padding: 0 }
+                    body: {
+                        padding: 0,
+                        height: 'calc(100vh - 250px)',
+                        minHeight: '350px',
+                        maxHeight: '550px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflowY: 'hidden'
+                    }
                 }}
             >
                 {stepDetails && (
                     <Tabs
+                        className="log-details-tabs"
+                        style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
                         tabBarStyle={{ padding: '0 24px', marginBottom: 0 }}
                         items={[
                             {
                                 key: 'request',
                                 label: <Space><CloudUploadOutlined /> Request Payload</Space>,
                                 children: (
-                                    <div style={{ height: 'calc(100vh - 250px)', minHeight: '300px', maxHeight: '550px', display: 'flex', flexDirection: 'column' }}>
+                                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                                         <div style={{
                                             padding: '16px 24px',
                                             background: '#f8fafc',
                                             borderBottom: '1px solid #e2e8f0',
+                                            flexShrink: 0
                                         }}>
                                             <Text type="secondary" style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', marginBottom: 8, display: 'block' }}>Endpoint URL</Text>
                                             <Input
@@ -364,7 +384,7 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                                 key: 'response',
                                 label: <Space><CloudDownloadOutlined /> Response Body</Space>,
                                 children: (
-                                    <div style={{ height: 'calc(100vh - 250px)', minHeight: '300px', maxHeight: '550px', display: 'flex', flexDirection: 'column' }}>
+                                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
                                         <div style={{ flex: 1, position: 'relative' }}>
                                             <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
                                                 <CopyAnimatedButton text={JSON.stringify(stepDetails.raw?.response || {}, null, 2)} />
