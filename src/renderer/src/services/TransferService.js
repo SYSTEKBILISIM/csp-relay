@@ -30,23 +30,7 @@ async function submitRelatedGridRow(projectName, formName, formFields, globalSto
     if (encryptedData) headers['bimser-encrypted-data'] = encryptedData;
     headers['bimser-language'] = userLang;
 
-    const response = await fetch(`${baseUrl}/CreateForm`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-        logEntry.status = 'Error';
-        let errorText = await response.text();
-        const err = new Error(`HTTP ${response.status} ${response.statusText}`);
-        err.rawResponse = errorText;
-        throw err;
-    }
-
-    const json = await response.json();
-    
-    // Capture raw diagnostics for Step Inspector
+    // Initialize raw details for diagnostics
     logEntry.raw = {
         request: {
             url: `${baseUrl}/CreateForm`,
@@ -54,63 +38,379 @@ async function submitRelatedGridRow(projectName, formName, formFields, globalSto
             headers,
             body: payload
         },
-        response: json
+        response: null
     };
 
-    // Check validation errors first
-    const saveResp = json.saveResponse || json;
-    let hasValidationErrors = false;
-    let errorMsgs = [];
-
-    if (saveResp?.actionResult === false) {
-        hasValidationErrors = true;
-    }
-
-    // Check direct validationErrors (common for CreateForm)
-    if (Array.isArray(saveResp?.validationErrors) && saveResp.validationErrors.length > 0) {
-        hasValidationErrors = true;
-        saveResp.validationErrors.forEach(e => { if (e.message) errorMsgs.push(e.message) });
-    }
-
-    // Check nested result.validationErrors
-    if (saveResp?.result && Array.isArray(saveResp.result.validationErrors) && saveResp.result.validationErrors.length > 0) {
-        hasValidationErrors = true;
-        saveResp.result.validationErrors.forEach(e => { if (e.message) errorMsgs.push(e.message) });
-    }
-
-    // Check nested forms validationErrors (common for CreateFlow)
-    if (Array.isArray(saveResp?.forms)) {
-        saveResp.forms.forEach(f => {
-            const errs = f.formSaveResponse?.result?.validationErrors;
-            if (errs) errs.forEach(e => { if (e.message) errorMsgs.push(e.message) });
+    try {
+        const response = await fetch(`${baseUrl}/CreateForm`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload)
         });
-    }
 
-    if (hasValidationErrors) {
+        if (!response.ok) {
+            logEntry.status = 'Error';
+            let errorText = await response.text();
+            logEntry.raw.response = errorText;
+            const err = new Error(`HTTP ${response.status} ${response.statusText}`);
+            err.rawResponse = errorText;
+            throw err;
+        }
+
+        const json = await response.json();
+        logEntry.raw.response = json;
+
+        // Check validation errors first
+        const saveResp = json.saveResponse || json;
+        let hasValidationErrors = false;
+        let errorMsgs = [];
+
+        if (saveResp?.actionResult === false) {
+            hasValidationErrors = true;
+        }
+
+        // Check direct validationErrors (common for CreateForm)
+        if (Array.isArray(saveResp?.validationErrors) && saveResp.validationErrors.length > 0) {
+            hasValidationErrors = true;
+            saveResp.validationErrors.forEach(e => { if (e.message) errorMsgs.push(e.message) });
+        }
+
+        // Check nested result.validationErrors
+        if (saveResp?.result && Array.isArray(saveResp.result.validationErrors) && saveResp.result.validationErrors.length > 0) {
+            hasValidationErrors = true;
+            saveResp.result.validationErrors.forEach(e => { if (e.message) errorMsgs.push(e.message) });
+        }
+
+        // Check nested forms validationErrors (common for CreateFlow)
+        if (Array.isArray(saveResp?.forms)) {
+            saveResp.forms.forEach(f => {
+                const errs = f.formSaveResponse?.result?.validationErrors;
+                if (errs) errs.forEach(e => { if (e.message) errorMsgs.push(e.message) });
+            });
+        }
+
+        if (hasValidationErrors) {
+            logEntry.status = 'Error';
+            const uniqueMsgs = [...new Set(errorMsgs)];
+            const errMessage = uniqueMsgs.length > 0
+                ? `• ${uniqueMsgs.join('\n• ')}`
+                : 'Server rejected creation due to validation errors';
+            const err = new Error(errMessage);
+            err.isValidationError = true;
+            err.rawResponse = JSON.stringify(json);
+            throw err;
+        }
+
+        // Attempt multiple paths to extract documentId
+        let docId = json?.saveResponse?.forms?.[0]?.formSaveResponse?.result?.documentId
+            || json?.saveResponse?.documentId
+            || json?.documentId;
+
+        if (!docId) {
+            logEntry.status = 'Error';
+            throw new Error('Failed to retrieve DocumentId from response');
+        }
+
+        logEntry.status = 'Success';
+        logEntry.details += ` (DocumentId: ${docId})`;
+        return docId;
+
+    } catch (err) {
         logEntry.status = 'Error';
-        const uniqueMsgs = [...new Set(errorMsgs)];
-        const errMessage = uniqueMsgs.length > 0
-            ? `• ${uniqueMsgs.join('\n• ')}`
-            : 'Server rejected creation due to validation errors';
-        const err = new Error(errMessage);
-        err.isValidationError = true;
-        err.rawResponse = JSON.stringify(json);
+        if (logEntry.raw && !logEntry.raw.response) {
+            logEntry.raw.response = err.message || String(err);
+        }
         throw err;
     }
+}
 
-    // Attempt multiple paths to extract documentId
-    let docId = json?.saveResponse?.forms?.[0]?.formSaveResponse?.result?.documentId
-        || json?.saveResponse?.documentId
-        || json?.documentId;
+/**
+ * Parses a cell value that may contain a JSON array string like ["a","b"] or [1,2]
+ * Returns an array of string values, or null if not a valid array.
+ */
+function tryParseArrayCell(rawVal) {
+    if (rawVal === null || rawVal === undefined) return null;
+    const str = String(rawVal).trim();
+    if (!str.startsWith('[')) return null;
+    try {
+        const parsed = JSON.parse(str);
+        if (Array.isArray(parsed)) return parsed.map(v => String(v));
+    } catch (e) { /* not valid JSON */ }
+    return null;
+}
 
-    if (!docId) {
-        logEntry.status = 'Error';
-        throw new Error('Failed to retrieve DocumentId from response');
+/**
+ * Helper: Resolve a mapping that is flagged as isArray.
+ * 
+ * Excel mode: parses the cell value as a JSON array (e.g. ["asd","abc"])
+ *   and runs resolvePrimitiveValue on each element.
+ * 
+ * API mode: parses the cell value as a JSON array, runs a lookup for
+ *   EACH element, then returns the collected values as an array.
+ *   e.g. ["asd","abc"] -> [2, 3]
+ * 
+ * Fixed mode: wraps the single fixed value in an array [fixedValue].
+ */
+async function resolveMappedValueArray(mapping, rowData, globalStore, apiCache, objectContext, executionLog = [], warnings = [], fieldName = '', systemSettings = {}) {
+    // ── EXCEL ────────────────────────────────────────────────────────────────────
+    if (mapping.source === 'Excel') {
+        const col = mapping.valueCol;
+        if (!col) return { Value: [], Text: '' };
+
+        const rawCell = rowData[col];
+        const items = tryParseArrayCell(rawCell);
+
+        if (!items) {
+            // Not an array - fall back to single value wrapped in array
+            const single = resolvePrimitiveValue(rawCell, mapping.dataType, mapping);
+            return { Value: single !== null ? [single] : [], Text: String(single !== null ? single : '') };
+        }
+
+        const values = items.map(item => resolvePrimitiveValue(item, mapping.dataType, mapping));
+        return { Value: values, Text: items.join(', ') };
     }
 
-    logEntry.status = 'Success';
-    logEntry.details += ` (DocumentId: ${docId})`;
-    return docId;
+    // ── API ──────────────────────────────────────────────────────────────────────
+    if (mapping.source === 'API') {
+        // Determine the search key column value (the array cell)
+        let rawCell = '';
+        if (mapping.searchKeyTemplate) {
+            rawCell = String(resolveTokens(mapping.searchKeyTemplate, rowData, objectContext));
+        } else if (mapping.textCol) {
+            rawCell = String(rowData[mapping.textCol] || '');
+        }
+
+        const items = tryParseArrayCell(rawCell);
+
+        // If not a parseable array, treat as single-element array
+        const searchItems = items || (rawCell.trim() ? [rawCell.trim()] : []);
+
+        if (searchItems.length === 0) {
+            executionLog.push({
+                key: `api_arr_skip_${Date.now()}_${Math.random()}`,
+                step: 'API Array Lookup',
+                details: `Field: ${fieldName} -> Skipped (empty array)`,
+                status: 'Success'
+            });
+            return { Value: [], Text: '' };
+        }
+
+        executionLog.push({
+            key: `api_arr_${Date.now()}_${Math.random()}`,
+            step: 'API Array Lookup',
+            details: `Field: ${fieldName}, Items: ${JSON.stringify(searchItems)}`,
+            status: 'Success'
+        });
+
+        // Create a non-array version of the mapping for individual lookups
+        const singleMapping = { ...mapping, isArray: false };
+
+        // Run a lookup for each item sequentially (cache will absorb repeated calls to same endpoint)
+        const resolvedValues = [];
+        const resolvedTexts = [];
+
+        for (const item of searchItems) {
+            // Temporarily patch rowData so that {{col}} resolves to this individual item
+            const patchedRowData = mapping.searchKeyTemplate
+                ? { ...rowData }  // tokens will be replaced via a patched template below
+                : { ...rowData, [mapping.textCol || '__array_item__']: item };
+
+            // Patch the searchKeyTemplate to return just this item (literal)
+            const patchedMapping = {
+                ...singleMapping,
+                searchKeyTemplate: item,  // use the raw item as the key directly
+            };
+
+            const result = await resolveSingleApiItem(patchedMapping, item, rowData, globalStore, apiCache, objectContext, executionLog, warnings, `${fieldName}[${item}]`, systemSettings);
+            resolvedValues.push(result.Value);
+            resolvedTexts.push(result.Text);
+        }
+
+        return { Value: resolvedValues, Text: resolvedTexts.join(', ') };
+    }
+
+    // ── FIXED ────────────────────────────────────────────────────────────────────
+    if (mapping.source === 'Fixed') {
+        const val = mapping.fixedValue;
+        const finalValue = resolvePrimitiveValue(val, mapping.dataType, mapping);
+        const finalText = mapping.fixedText !== undefined && mapping.fixedText !== ''
+            ? String(mapping.fixedText)
+            : String(finalValue !== null ? finalValue : '');
+        return { Value: finalValue !== null ? [finalValue] : [], Text: finalText };
+    }
+
+    return { Value: [], Text: '' };
+}
+
+/**
+ * Internal helper used by resolveMappedValueArray for API mode.
+ * Performs a single-item lookup against the already-fetched API result list.
+ * Re-uses the cache so the same API endpoint is called only once per unique body.
+ */
+async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, apiCache, objectContext, executionLog = [], warnings = [], fieldName = '', systemSettings = {}) {
+    const apiMatchThreshold = systemSettings.apiMatchThreshold !== undefined ? systemSettings.apiMatchThreshold : 0.9;
+    const apiCacheLimit = systemSettings.apiCacheLimit !== undefined ? systemSettings.apiCacheLimit : 50;
+
+    // Build URL / Body (same as main resolveMappedValue)
+    let resolvedUrl = '';
+    if (mapping.apiType === 'Internal') {
+        const deployUrl = globalStore.get('deployUrl') || '';
+        const projectName = globalStore.get('projectName') || '';
+        const cleanUrl = deployUrl.replace(/\/$/, "");
+        const queryName = resolveTokens(mapping.apiUrl, rowData, objectContext);
+        resolvedUrl = `${cleanUrl}/apps/${projectName}/latest/api/DataSource/${queryName}`;
+    } else {
+        resolvedUrl = resolveTokens(mapping.apiUrl, rowData, objectContext);
+    }
+
+    let resolvedBody = resolveTokens(mapping.apiBody, rowData, objectContext);
+    const resolvedHeaders = resolveTokens(mapping.apiHeaders || '{}', rowData, objectContext);
+
+    if (mapping.apiType === 'Internal') {
+        try {
+            const parsedBody = JSON.parse(resolvedBody || '{}');
+            if (!parsedBody.loadOptions) parsedBody.loadOptions = {};
+            parsedBody.loadOptions.distinct = true;
+            parsedBody.loadOptions.filterNulls = true;
+            parsedBody.loadOptions.filters = parsedBody.loadOptions.filters || [];
+            parsedBody.loadOptions.sorts = parsedBody.loadOptions.sorts || null;
+            if (mapping.valuePath) {
+                const m = mapping.valuePath.match(/{{\s*([^{}]+?)\s*}}/);
+                if (m) parsedBody.loadOptions.valueExpr = m[1].trim();
+            }
+            delete parsedBody.loadOptions.pagination;
+            if (parsedBody.forceRefresh === undefined) parsedBody.forceRefresh = false;
+            if (mapping.parameters && Array.isArray(mapping.parameters)) {
+                if (!Array.isArray(parsedBody.parameters)) parsedBody.parameters = [];
+                mapping.parameters.forEach(p => {
+                    if (p.key) {
+                        const rawVal = resolveTokens(p.value, rowData, objectContext);
+                        let finalVal = rawVal;
+                        if (typeof rawVal === 'string') {
+                            if (rawVal !== '' && !isNaN(rawVal)) finalVal = Number(rawVal);
+                            else if (rawVal.toLowerCase() === 'true') finalVal = true;
+                            else if (rawVal.toLowerCase() === 'false') finalVal = false;
+                        }
+                        const existingIdx = parsedBody.parameters.findIndex(item => item.key === p.key);
+                        if (existingIdx !== -1) parsedBody.parameters[existingIdx].value = finalVal;
+                        else parsedBody.parameters.push({ key: p.key, value: finalVal });
+                    }
+                });
+            }
+            resolvedBody = JSON.stringify(parsedBody);
+        } catch (e) {
+            console.warn('Failed to inject parameters into Internal API body (array item)', e);
+        }
+    } else if (mapping.apiType === 'External' && mapping.parameters && Array.isArray(mapping.parameters)) {
+        try {
+            const urlObj = new URL(resolvedUrl);
+            mapping.parameters.forEach(p => {
+                const key = p.key;
+                const val = resolveTokens(p.value, rowData, objectContext);
+                if (key) urlObj.searchParams.append(key, val);
+            });
+            resolvedUrl = urlObj.toString();
+        } catch (e) {
+            console.warn('Invalid URL for adding params', resolvedUrl);
+        }
+    }
+
+    const cacheKey = `${resolvedUrl}|${resolvedBody}`;
+    let apiResultList = [];
+
+    if (apiCache.has(cacheKey)) {
+        apiResultList = apiCache.get(cacheKey);
+        apiCache.delete(cacheKey);
+        apiCache.set(cacheKey, apiResultList);
+    } else {
+        try {
+            const fetchOptions = {
+                method: mapping.apiType === 'Internal' ? 'POST' : (mapping.apiMethod || 'GET'),
+                headers: { 'Content-Type': 'application/json' }
+            };
+            if (mapping.apiType === 'Internal') {
+                const token = globalStore.get('token');
+                const encryptedData = globalStore.get('encryptedData');
+                const userLang = globalStore.get('language') || 'tr-TR';
+                if (token) fetchOptions.headers['Authorization'] = `Bearer ${token}`;
+                if (encryptedData) fetchOptions.headers['bimser-encrypted-data'] = encryptedData;
+                fetchOptions.headers['bimser-language'] = userLang;
+            }
+            if (mapping.apiHeaders) {
+                try {
+                    const h = JSON.parse(resolvedHeaders);
+                    fetchOptions.headers = { ...fetchOptions.headers, ...h };
+                } catch (e) { /* ignore */ }
+            }
+            if (fetchOptions.method !== 'GET' && fetchOptions.method !== 'HEAD') {
+                fetchOptions.body = resolvedBody;
+            }
+            const res = await fetch(resolvedUrl, fetchOptions);
+            if (res.ok) {
+                const json = await res.json();
+                apiResultList = _.get(json, mapping.responsePath || 'result.result') || [];
+                apiCache.set(cacheKey, apiResultList);
+                if (apiCache.size > apiCacheLimit) {
+                    const keysIter = apiCache.keys();
+                    const deleteCount = Math.max(1, Math.round(apiCacheLimit * 0.2));
+                    for (let i = 0; i < deleteCount; i++) {
+                        const nextKey = keysIter.next().value;
+                        if (nextKey !== undefined) apiCache.delete(nextKey);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('Array Item Lookup API Error', err);
+        }
+    }
+
+    // Match this specific searchKey against the result list
+    let bestMatch = null;
+    let maxSimilarity = 0;
+    let bestMatchText = '';
+
+    if (Array.isArray(apiResultList)) {
+        for (const item of apiResultList) {
+            const itemText = (mapping.displayFormat || '').replace(/{{\s*([^{}]+?)\s*}}/g, (m, rawK) => {
+                const k = rawK.trim();
+                return item[k] !== undefined ? item[k] : '';
+            });
+            const similarity = calculateSimilarity(searchKey, itemText);
+            if (similarity > maxSimilarity) {
+                maxSimilarity = similarity;
+                bestMatch = item;
+                bestMatchText = itemText;
+            }
+            if (maxSimilarity === 1) break;
+        }
+    }
+
+    if (bestMatch && maxSimilarity >= apiMatchThreshold) {
+        const valTemplate = mapping.valuePath || '{{id}}';
+        let rawValue = '';
+        if (valTemplate.includes('{{')) {
+            rawValue = valTemplate.replace(/{{\s*([^{}]+?)\s*}}/g, (m, rawK) => {
+                const k = rawK.trim();
+                return bestMatch[k] !== undefined ? bestMatch[k] : '';
+            });
+        } else {
+            rawValue = _.get(bestMatch, valTemplate);
+        }
+        const finalValue = resolvePrimitiveValue(rawValue, mapping.dataType, mapping);
+        const txtTemplate = mapping.textPath || mapping.displayFormat;
+        let finalText = searchKey;
+        if (txtTemplate) {
+            finalText = txtTemplate.replace(/{{\s*([^{}]+?)\s*}}/g, (m, rawK) => {
+                const k = rawK.trim();
+                return bestMatch[k] !== undefined ? bestMatch[k] : '';
+            });
+        }
+        return { Value: finalValue, Text: finalText };
+    } else {
+        const showBest = bestMatchText && maxSimilarity > 0.15;
+        warnings.push(`Field '${fieldName}': Could not match API value for '${searchKey}'${showBest ? `. (Closest: "${bestMatchText}" - ${(maxSimilarity * 100).toFixed(0)}%)` : ''}`);
+        return { Value: null, Text: '' };
+    }
 }
 
 /**
@@ -125,11 +425,17 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
 
     if (!mapping) return { Value: null, Text: '' };
 
+    // ── ARRAY MODE ──────────────────────────────────────────────────────────────
+    if (mapping.isArray) {
+        return await resolveMappedValueArray(mapping, rowData, globalStore, apiCache, objectContext, executionLog, warnings, fieldName, systemSettings);
+    }
+    // ────────────────────────────────────────────────────────────────────────────
+
     if (mapping.source === 'Excel') {
         const col = mapping.valueCol;
         if (col) {
             const rawVal = rowData[col];
-            finalValue = resolvePrimitiveValue(rawVal, mapping.dataType);
+            finalValue = resolvePrimitiveValue(rawVal, mapping.dataType, mapping);
             finalText = String(finalValue !== null ? finalValue : '');
         }
     } else if (mapping.source === 'API') {
@@ -356,7 +662,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
             } else {
                 rawValue = _.get(bestMatch, valTemplate);
             }
-            finalValue = resolvePrimitiveValue(rawValue, mapping.dataType);
+            finalValue = resolvePrimitiveValue(rawValue, mapping.dataType, mapping);
 
             // 2. Resolve Text Field (Templates) - Fallback to displayFormat (Match Pattern)
             const txtTemplate = mapping.textPath || mapping.displayFormat;
@@ -386,7 +692,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
     else if (mapping.source === 'Fixed') {
         const val = mapping.fixedValue;
         // Check if value is numeric or primitive and resolve it
-        finalValue = resolvePrimitiveValue(val, mapping.dataType);
+        finalValue = resolvePrimitiveValue(val, mapping.dataType, mapping);
         finalText = mapping.fixedText !== undefined && mapping.fixedText !== ''
             ? String(mapping.fixedText)
             : String(finalValue !== null ? finalValue : '');
@@ -449,7 +755,10 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 return detailVal != null && detailVal !== '' && String(detailVal).trim() === String(masterValue).trim();
             });
 
-            return await Promise.all(gridRows.map(async gridRow => {
+            // Process grid rows sequentially to prevent parallel Electron IPC failures
+            // (especially when reading large files via readFileAsBase64)
+            const resolvedRows = [];
+            for (const gridRow of gridRows) {
                 const rowContext = { ...objectContext }; // inherit parent context
                 const rowObjects = [];
 
@@ -461,30 +770,41 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         const nestedRows = await resolveGridRows(colType, colDef.mapping, gridRow[colDef.mapping?.masterKey]);
 
                         if (colType === 'RelatedGrid') {
-                        const chunkSize = relatedGridChunkSize;
-                        for (let i = 0; i < nestedRows.length; i += chunkSize) {
+                            const submittedRowRefs = [];
+                            const chunkSize = relatedGridChunkSize;
+                            for (let i = 0; i < nestedRows.length; i += chunkSize) {
                                 const chunk = nestedRows.slice(i, i + chunkSize);
-                                const results = await Promise.all(chunk.map(async (nestedRow) => {
-                                    try {
-                                        const relationDocId = await submitRelatedGridRow(
-                                            colDef.mapping?.relatedProjectName,
-                                            colDef.mapping?.relatedFormName,
-                                            nestedRow.FormFields,
-                                            globalStore,
-                                            executionLog,
-                                            loginAsValue
-                                        );
-                                        return { RelationDocumentId: relationDocId };
-                                    } catch (err) {
-                                        console.error('Failed to submit nested RelatedGrid row:', err);
-                                        const customErr = new Error(`Grid mapping '${colDef.name}' row failed: ${err.message}`);
-                                        customErr.isValidationError = err.isValidationError;
-                                        customErr.failedPayload = nestedRow.FormFields;
-                                        customErr.rawResponse = err.rawResponse;
-                                        throw customErr;
-                                    }
+                                const outcomes = await Promise.allSettled(chunk.map(async (nestedRow) => {
+                                    const relationDocId = await submitRelatedGridRow(
+                                        colDef.mapping?.relatedProjectName,
+                                        colDef.mapping?.relatedFormName,
+                                        nestedRow.FormFields,
+                                        globalStore,
+                                        executionLog,
+                                        loginAsValue
+                                    );
+                                    return { RelationDocumentId: relationDocId };
                                 }));
-                                submittedRowRefs.push(...results);
+
+                                let firstError = null;
+                                const chunkResults = [];
+                                for (const outcome of outcomes) {
+                                    if (outcome.status === 'fulfilled') {
+                                        chunkResults.push(outcome.value);
+                                    } else {
+                                        if (!firstError) firstError = outcome.reason;
+                                    }
+                                }
+
+                                if (firstError) {
+                                    console.error('Failed to submit nested RelatedGrid row:', firstError);
+                                    const customErr = new Error(`Grid mapping '${colDef.name}' row failed: ${firstError.message}`);
+                                    customErr.isValidationError = firstError.isValidationError;
+                                    customErr.rawResponse = firstError.rawResponse;
+                                    throw customErr;
+                                }
+
+                                submittedRowRefs.push(...chunkResults);
                             }
 
                             rowObjects.push({
@@ -521,10 +841,23 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                         Extension: fileResult.extension,
                                         Data: fileResult.data
                                     });
+                                } else {
+                                    // Log failure so it's visible in the Operation Tree
+                                    const errMsg = `RelatedDocument '${colDef.name}': failed to read file "${filePath}" - ${fileResult.error || 'Unknown error'}`;
+                                    warnings.push(errMsg);
+                                    executionLog.push({
+                                        key: `reldoc_err_${Date.now()}_${Math.random()}`,
+                                        step: 'RelatedDocument Read',
+                                        details: errMsg,
+                                        status: 'Warning'
+                                    });
                                 }
+                            } else if (filePath && !window.api?.readFileAsBase64) {
+                                const errMsg = `RelatedDocument '${colDef.name}': readFileAsBase64 API not available`;
+                                warnings.push(errMsg);
                             }
                         }
-                        continue; // Ignore if failed or empty, move to next
+                        continue; // Skip to next column
                     }
 
                     // Standard value resolution
@@ -585,24 +918,24 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     }
                 });
 
-                if (gridType === 'RelatedGrid') {
-                    return {
+                const rowResult = gridType === 'RelatedGrid'
+                    ? {
                         FormFields: {
                             Objects: objects,
                             InlineGrids: inlineGrids,
                             RelatedGrids: relatedGrids,
                             RelatedDocuments: relatedDocs
                         }
-                    };
-                } else {
-                    return {
+                    }
+                    : {
                         Objects: objects,
                         InlineGrids: inlineGrids,
                         RelatedGrids: relatedGrids,
                         RelatedDocuments: relatedDocs
                     };
-                }
-            }));
+                resolvedRows.push(rowResult);
+            }
+            return resolvedRows;
         };
 
         // --- Helper to resolve a list of parameters ---
@@ -680,30 +1013,41 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     if (masterCol) {
                         const masterValue = rowData[masterCol];
                         const resolvedRows = await resolveGridRows(type, mapping, masterValue);
+                        const submittedRowRefs = [];
                         const chunkSize = relatedGridChunkSize;
                         for (let i = 0; i < resolvedRows.length; i += chunkSize) {
                             const chunk = resolvedRows.slice(i, i + chunkSize);
-                            const results = await Promise.all(chunk.map(async (rRow) => {
-                                try {
-                                    const relationDocId = await submitRelatedGridRow(
-                                        mapping.relatedProjectName,
-                                        mapping.relatedFormName,
-                                        rRow.FormFields,
-                                        globalStore,
-                                        executionLog,
-                                        loginAsValue
-                                    );
-                                    return { RelationDocumentId: relationDocId };
-                                } catch (err) {
-                                    console.error('Failed to submit top-level RelatedGrid row:', err);
-                                    const customErr = new Error(`Grid mapping '${def.name}' row failed: ${err.message}`);
-                                    customErr.isValidationError = err.isValidationError;
-                                    customErr.failedPayload = rRow.FormFields;
-                                    customErr.rawResponse = err.rawResponse;
-                                    throw customErr;
-                                }
+                            const outcomes = await Promise.allSettled(chunk.map(async (rRow) => {
+                                const relationDocId = await submitRelatedGridRow(
+                                    mapping.relatedProjectName,
+                                    mapping.relatedFormName,
+                                    rRow.FormFields,
+                                    globalStore,
+                                    executionLog,
+                                    loginAsValue
+                                );
+                                return { RelationDocumentId: relationDocId };
                             }));
-                            submittedRowRefs.push(...results);
+
+                            let firstError = null;
+                            const chunkResults = [];
+                            for (const outcome of outcomes) {
+                                if (outcome.status === 'fulfilled') {
+                                    chunkResults.push(outcome.value);
+                                } else {
+                                    if (!firstError) firstError = outcome.reason;
+                                }
+                            }
+
+                            if (firstError) {
+                                console.error('Failed to submit top-level RelatedGrid row:', firstError);
+                                const customErr = new Error(`Grid mapping '${def.name}' row failed: ${firstError.message}`);
+                                customErr.isValidationError = firstError.isValidationError;
+                                customErr.rawResponse = firstError.rawResponse;
+                                throw customErr;
+                            }
+
+                            submittedRowRefs.push(...chunkResults);
                         }
                         rowObj = {
                             FieldName: def.name,
@@ -730,9 +1074,16 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                     Data: fileResult.data
                                 };
                             } else {
-                                console.warn(`[RelatedDocument] Failed to read file "${filePath}": ${fileResult.error}`);
+                                const errMsg = `RelatedDocument '${def.name}': failed to read file "${filePath}" - ${fileResult.error || 'Unknown error'}`;
+                                warnings.push(errMsg);
+                                executionLog.push({
+                                    key: `reldoc_err_${Date.now()}_${Math.random()}`,
+                                    step: 'RelatedDocument Read',
+                                    details: errMsg,
+                                    status: 'Warning'
+                                });
                             }
-                        } else {
+                        } else if (!filePath) {
                             console.warn(`[RelatedDocument] No file path in column "${pathCol}" for this row.`);
                         }
                     }

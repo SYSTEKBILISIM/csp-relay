@@ -1,8 +1,8 @@
 import React from 'react';
-import { Card, Form, Row, Col, Typography, Segmented, Select, Input, Space, Popover, Divider, Collapse, Tag, Steps, AutoComplete, Badge, Button } from 'antd';
-import { 
-    TableOutlined, BuildOutlined, PushpinOutlined, InfoCircleOutlined, 
-    LinkOutlined, ArrowRightOutlined, GlobalOutlined, SearchOutlined, 
+import { Card, Form, Row, Col, Typography, Segmented, Select, Input, Space, Popover, Divider, Collapse, Tag, Steps, AutoComplete, Badge, Button, Checkbox } from 'antd';
+import {
+    TableOutlined, BuildOutlined, PushpinOutlined, InfoCircleOutlined,
+    LinkOutlined, ArrowRightOutlined, GlobalOutlined, SearchOutlined,
     NodeIndexOutlined, EyeOutlined, InfoCircleFilled, ArrowLeftOutlined
 } from '@ant-design/icons';
 import { ParametersList } from './ParametersList';
@@ -64,8 +64,8 @@ export const MappingFields = ({
                 boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
                 marginBottom: 16
             }}>
-                <Row gutter={20} align="middle">
-                    <Col span={15}>
+                <Row gutter={16} align="middle">
+                    <Col span={11}>
                         <Form.Item
                             name={getName("source")}
                             label={<Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mapping Mode</Text>}
@@ -87,22 +87,68 @@ export const MappingFields = ({
                             />
                         </Form.Item>
                     </Col>
-                    <Col span={9}>
+                    <Col span={6}>
+                        <Form.Item
+                            name={getName("isArray")}
+                            label={
+                                <Space size={4}>
+                                    <Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Structure</Text>
+                                    <Popover
+                                        content={
+                                            <div style={{ maxWidth: 260, fontSize: 12 }}>
+                                                <Text strong>Array Mode</Text>
+                                                <p style={{ margin: '4px 0 0 0', color: '#64748b' }}>
+                                                    If enabled, cell values like <Text code>["abc", "def"]</Text> will be parsed as a JSON array and resolved/mapped individually.
+                                                </p>
+                                            </div>
+                                        }
+                                        trigger="hover"
+                                        placement="topRight"
+                                    >
+                                        <InfoCircleOutlined style={{ fontSize: 10, color: '#94a3b8', cursor: 'help' }} />
+                                    </Popover>
+                                </Space>
+                            }
+                            style={{ marginBottom: 0 }}
+                        >
+                            <Segmented
+                                options={[
+                                    { label: 'Single', value: false },
+                                    { label: 'Array', value: true }
+                                ]}
+                                block
+                                size="middle"
+                                style={{ height: 32, display: 'flex', alignItems: 'center' }}
+                                onChange={(val) => {
+                                    const path = getName("isArray");
+                                    formInstance.setFieldValue(path, val);
+                                }}
+                            />
+                        </Form.Item>
+                    </Col>
+                    <Col span={7}>
                         <Form.Item
                             name={getName("dataType")}
                             label={<Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Type</Text>}
                             rules={[{ required: true, message: 'Please select Target Type' }]}
                             style={{ marginBottom: 0 }}
                         >
-                            <Select placeholder="Type" variant="filled" style={{ borderRadius: 8, width: '100%', height: 32 }} size="middle">
-                                <Option value="String">String</Option>
-                                <Option value="Integer">Integer</Option>
-                                <Option value="Decimal">Decimal</Option>
-                                <Option value="Date">Date</Option>
-                                <Option value="Boolean">Boolean</Option>
-                            </Select>
+                            <Select
+                                placeholder="Type"
+                                variant="filled"
+                                style={{ borderRadius: 8, width: '100%', height: 32 }}
+                                size="middle"
+                                options={[
+                                    { label: 'String', value: 'String' },
+                                    { label: 'Integer', value: 'Integer' },
+                                    { label: 'Decimal', value: 'Decimal' },
+                                    { label: 'Date', value: 'Date' },
+                                    { label: 'Boolean', value: 'Boolean' }
+                                ]}
+                            />
                         </Form.Item>
                     </Col>
+
                 </Row>
             </div>
 
@@ -110,6 +156,7 @@ export const MappingFields = ({
             <Form.Item noStyle shouldUpdate>
                 {({ getFieldValue }) => {
                     const sourceState = getFieldValue(getName("source")) || 'Excel';
+                    const dataTypeState = getFieldValue(getName("dataType")) || 'String';
                     const apiType = getFieldValue(getName("apiType")) || 'Internal';
                     const url = getFieldValue(getName('apiUrl')) || '';
                     const body = getFieldValue(getName('apiBody')) || '';
@@ -117,12 +164,101 @@ export const MappingFields = ({
 
                     return (
                         <>
+                            {dataTypeState === 'Boolean' && (
+                                <div style={{
+                                    animation: 'fadeIn 0.2s',
+                                    background: '#f8faff',
+                                    padding: '12px 14px',
+                                    borderRadius: '12px',
+                                    borderTop: '4px solid #1677ff',
+                                    border: '1px solid #eef2f6',
+                                    marginBottom: 16
+                                }}>
+                                    <Text strong style={{ fontSize: 12, color: '#1e293b', display: 'block', marginBottom: 12 }}>
+                                        Boolean Value Mapping Settings
+                                    </Text>
+
+                                    {/* Row 1: Checkboxes aligned in one row with 2-1-1 proportions (12-6-6) */}
+                                    <Row gutter={16} style={{ marginBottom: getFieldValue(getName("nonEmptyIsTrue")) ? 0 : 12 }}>
+                                        <Col span={12}>
+                                            <Form.Item
+                                                name={getName("nonEmptyIsTrue")}
+                                                valuePropName="checked"
+                                                style={{ marginBottom: 0 }}
+                                            >
+                                                <Checkbox style={{ fontSize: 11, fontWeight: 500 }}>
+                                                    Map any non-empty value to True
+                                                </Checkbox>
+                                            </Form.Item>
+                                        </Col>
+
+                                        {!getFieldValue(getName("nonEmptyIsTrue")) && (
+                                            <>
+                                                <Col span={6}>
+                                                    <Form.Item
+                                                        name={getName("otherValuesAreFalse")}
+                                                        valuePropName="checked"
+                                                        style={{ marginBottom: 0 }}
+                                                    >
+                                                        <Checkbox style={{ fontSize: 11, fontWeight: 500 }}>
+                                                            Treat unmatched as False
+                                                        </Checkbox>
+                                                    </Form.Item>
+                                                </Col>
+                                                <Col span={6}>
+                                                    <Form.Item
+                                                        name={getName("emptyIsFalse")}
+                                                        valuePropName="checked"
+                                                        style={{ marginBottom: 0 }}
+                                                    >
+                                                        <Checkbox style={{ fontSize: 11, fontWeight: 500 }}>
+                                                            Treat Null/Empty as False
+                                                        </Checkbox>
+                                                    </Form.Item>
+                                                </Col>
+                                            </>
+                                        )}
+                                    </Row>
+
+                                    {/* Row 2: Inputs (True / False) */}
+                                    {!getFieldValue(getName("nonEmptyIsTrue")) && (
+                                        <Row gutter={16}>
+                                            {/* True Values Column */}
+                                            <Col span={getFieldValue(getName("otherValuesAreFalse")) ? 24 : 12}>
+                                                <Form.Item
+                                                    name={getName("trueValues")}
+                                                    label={<Text strong style={{ fontSize: 11, color: '#1e293b' }}>True Values (Comma separated)</Text>}
+                                                    rules={[{ required: true, message: 'Bu alanın doldurulması zorunludur' }]}
+                                                    style={{ marginBottom: 0 }}
+                                                >
+                                                    <Input size="small" placeholder="e.g. yes, true, active" className="boolean-settings-input" />
+                                                </Form.Item>
+                                            </Col>
+
+                                            {/* False Values Column */}
+                                            {!getFieldValue(getName("otherValuesAreFalse")) && (
+                                                <Col span={12}>
+                                                    <Form.Item
+                                                        name={getName("falseValues")}
+                                                        label={<Text strong style={{ fontSize: 11, color: '#1e293b' }}>False Values (Comma separated)</Text>}
+                                                        rules={[{ required: true, message: 'Bu alanın doldurulması zorunludur' }]}
+                                                        style={{ marginBottom: 0 }}
+                                                    >
+                                                        <Input size="small" placeholder="e.g. no, false, inactive" className="boolean-settings-input" />
+                                                    </Form.Item>
+                                                </Col>
+                                            )}
+                                        </Row>
+                                    )}
+                                </div>
+                            )}
+
                             {/* 2. Source: EXCEL MODE */}
                             {sourceState === 'Excel' && (
-                                <div style={{ 
+                                <div style={{
                                     animation: 'fadeIn 0.2s',
-                                    background: '#f8faff', 
-                                    padding: '12px 14px', 
+                                    background: '#f8faff',
+                                    padding: '12px 14px',
                                     borderRadius: '12px',
                                     borderTop: '4px solid #1677ff',
                                     border: '1px solid #eef2f6'
@@ -174,10 +310,10 @@ export const MappingFields = ({
                                             <div style={{ animation: 'fadeIn 0.2s' }}>
                                                 <Row gutter={16}>
                                                     <Col span={14}>
-                                                        <Form.Item 
-                                                            name={getName("apiType")} 
-                                                            label={<Text strong style={{ fontSize: 11 }}>Topology</Text>} 
-                                                            rules={[{ required: true, message: 'Please select Topology' }]} 
+                                                        <Form.Item
+                                                            name={getName("apiType")}
+                                                            label={<Text strong style={{ fontSize: 11 }}>Topology</Text>}
+                                                            rules={[{ required: true, message: 'Please select Topology' }]}
                                                             style={{ marginBottom: 12 }}
                                                             initialValue="Internal"
                                                         >
@@ -197,18 +333,18 @@ export const MappingFields = ({
                                                         </Form.Item>
                                                     </Col>
                                                     <Col span={10}>
-                                                        <Form.Item 
-                                                            name={getName("apiMethod")} 
-                                                            label={<Text strong style={{ fontSize: 11 }}>Method</Text>} 
-                                                            rules={[{ required: true, message: 'Please select Method' }]} 
+                                                        <Form.Item
+                                                            name={getName("apiMethod")}
+                                                            label={<Text strong style={{ fontSize: 11 }}>Method</Text>}
+                                                            rules={[{ required: true, message: 'Please select Method' }]}
                                                             style={{ marginBottom: 12 }}
                                                             initialValue="GET"
                                                         >
-                                                            <Segmented 
-                                                                size="middle" 
-                                                                options={['GET', 'POST', 'PUT']} 
-                                                                block 
-                                                                style={{ height: 32, display: 'flex', alignItems: 'center' }} 
+                                                            <Segmented
+                                                                size="middle"
+                                                                options={['GET', 'POST', 'PUT']}
+                                                                block
+                                                                style={{ height: 32, display: 'flex', alignItems: 'center' }}
                                                                 onChange={(val) => {
                                                                     const path = getName("apiMethod");
                                                                     formInstance.setFieldValue(path, val);
@@ -266,41 +402,45 @@ export const MappingFields = ({
                                                     }
 
                                                     collapseItems.push(
-                                                        { key: 'headers', label: <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                            <div style={{ width: 28, height: 28, background: '#f5f3ff', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                                <GlobalOutlined style={{ color: '#7c3aed', fontSize: 14 }} />
-                                                            </div>
-                                                            <Text strong style={{ fontSize: 15, color: '#1e293b' }}>Custom Headers (JSON)</Text>
-                                                        </div>, children: (
-                                                            <div style={{ padding: '2px 0 2px 24px' }}>
-                                                                <Form.Item name={getName("apiHeaders")} noStyle>
-                                                                    <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
-                                                                        <Editor height="120px" defaultLanguage="json" theme="light" options={{ minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: 12 }} />
-                                                                    </div>
-                                                                </Form.Item>
-                                                            </div>
-                                                        )},
-                                                        { key: 'body', label: <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                                                            <div style={{ width: 28, height: 28, background: '#fff1f2', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                                                <BuildOutlined style={{ color: '#e11d48', fontSize: 14 }} />
-                                                            </div>
-                                                            <Text strong style={{ fontSize: 15, color: '#1e293b' }}>Request Body (JSON)</Text>
-                                                        </div>, children: (
-                                                            <div style={{ padding: '2px 0 2px 24px' }}>
-                                                                <Form.Item name={getName("apiBody")} noStyle>
-                                                                    <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
-                                                                        <Editor height="120px" defaultLanguage="json" theme="light" options={{ minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: 12 }} />
-                                                                    </div>
-                                                                </Form.Item>
-                                                            </div>
-                                                        )}
+                                                        {
+                                                            key: 'headers', label: <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                                <div style={{ width: 28, height: 28, background: '#f5f3ff', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                                    <GlobalOutlined style={{ color: '#7c3aed', fontSize: 14 }} />
+                                                                </div>
+                                                                <Text strong style={{ fontSize: 15, color: '#1e293b' }}>Custom Headers (JSON)</Text>
+                                                            </div>, children: (
+                                                                <div style={{ padding: '2px 0 2px 24px' }}>
+                                                                    <Form.Item name={getName("apiHeaders")} noStyle>
+                                                                        <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+                                                                            <Editor height="120px" defaultLanguage="json" theme="light" options={{ minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: 12 }} />
+                                                                        </div>
+                                                                    </Form.Item>
+                                                                </div>
+                                                            )
+                                                        },
+                                                        {
+                                                            key: 'body', label: <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                                                <div style={{ width: 28, height: 28, background: '#fff1f2', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                                                    <BuildOutlined style={{ color: '#e11d48', fontSize: 14 }} />
+                                                                </div>
+                                                                <Text strong style={{ fontSize: 15, color: '#1e293b' }}>Request Body (JSON)</Text>
+                                                            </div>, children: (
+                                                                <div style={{ padding: '2px 0 2px 24px' }}>
+                                                                    <Form.Item name={getName("apiBody")} noStyle>
+                                                                        <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+                                                                            <Editor height="120px" defaultLanguage="json" theme="light" options={{ minimap: { enabled: false }, scrollBeyondLastLine: false, fontSize: 12 }} />
+                                                                        </div>
+                                                                    </Form.Item>
+                                                                </div>
+                                                            )
+                                                        }
                                                     );
 
                                                     return (
                                                         <>
-                                                            <Collapse 
-                                                                ghost 
-                                                                size="small" 
+                                                            <Collapse
+                                                                ghost
+                                                                size="small"
                                                                 defaultActiveKey={apiType === 'Internal' ? ['params'] : ['body']}
                                                                 items={collapseItems}
                                                                 style={{ marginBottom: 16 }}
@@ -323,7 +463,7 @@ export const MappingFields = ({
                                                         </Col>
                                                         <Col span={12}>
                                                             <Form.Item name={getName("displayFormat")} label={<Text strong style={{ fontSize: 11 }}>Match Property</Text>} rules={[{ required: true, message: 'Please enter Match Property' }]} style={{ marginBottom: 12 }}>
-                                                                    <Input size="small" placeholder="{{Name}}" variant="filled" style={{ borderRadius: 6, background: '#f3f4f6' }} />
+                                                                <Input size="small" placeholder="{{Name}}" variant="filled" style={{ borderRadius: 6, background: '#f3f4f6' }} />
                                                             </Form.Item>
                                                         </Col>
                                                     </Row>
@@ -357,8 +497,8 @@ export const MappingFields = ({
 
                                         {/* Navigation Buttons */}
                                         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16, borderTop: '1px solid #f1f5f9', paddingTop: 12 }}>
-                                            <Button 
-                                                disabled={apiStep === 0} 
+                                            <Button
+                                                disabled={apiStep === 0}
                                                 onClick={() => setApiStep(prev => prev - 1)}
                                                 icon={<ArrowLeftOutlined />}
                                                 size="small"
@@ -366,8 +506,8 @@ export const MappingFields = ({
                                                 Back
                                             </Button>
                                             {apiStep < 2 ? (
-                                                <Button 
-                                                    type="primary" 
+                                                <Button
+                                                    type="primary"
                                                     onClick={() => setApiStep(prev => prev + 1)}
                                                     icon={<ArrowRightOutlined />}
                                                     size="small"
@@ -386,10 +526,10 @@ export const MappingFields = ({
 
                             {/* 4. Source: FIXED VALUE MODE */}
                             {sourceState === 'Fixed' && (
-                                <div style={{ 
+                                <div style={{
                                     animation: 'fadeIn 0.2s',
-                                    background: '#fffef3', 
-                                    padding: '12px 14px', 
+                                    background: '#fffef3',
+                                    padding: '12px 14px',
                                     borderRadius: '12px',
                                     borderTop: '4px solid #faad14',
                                     border: '1px solid #fff1b8'
@@ -423,14 +563,14 @@ export const MappingFields = ({
             </Form.Item>
 
             {/* Redesigned Summary Footer - More Compact */}
-            <div style={{ 
-                marginTop: 20, 
-                padding: '10px 14px', 
-                borderRadius: '10px', 
-                background: '#f8fafc', 
+            <div style={{
+                marginTop: 20,
+                padding: '10px 14px',
+                borderRadius: '10px',
+                background: '#f8fafc',
                 border: '1px solid #e2e8f0',
-                display: 'flex', 
-                alignItems: 'center', 
+                display: 'flex',
+                alignItems: 'center',
                 gap: 12
             }}>
                 <Badge status="processing" color="#1677ff" />
@@ -441,18 +581,47 @@ export const MappingFields = ({
                         const val = getFieldValue(getName('valueCol'));
                         const compare = getFieldValue(getName('displayFormat'));
                         const fixedVal = getFieldValue(getName('fixedValue'));
+                        const isArray = getFieldValue(getName('isArray'));
 
                         return (
-                            <div style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                <Text strong style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', display: 'block' }}>Active Preview</Text>
+                            <div style={{ flex: 1, lineHeight: '1.6' }}>
+                                <Text strong style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', display: 'block', marginBottom: 2 }}>Active Preview / Mapping logic</Text>
                                 {src === 'Excel' ? (
-                                    <Text style={{ fontSize: 12 }}>Mapped from <Tag color="blue" bordered={false} style={{ fontSize: 11, padding: '0 4px' }}>{val || '???'}</Tag></Text>
+                                    <Text style={{ fontSize: 12, color: '#334155' }}>
+                                        {isArray ? (
+                                            <span>
+                                                Parses Excel column <Tag color="blue" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{val || '???'}</Tag> as a JSON array and maps each item individually.
+                                            </span>
+                                        ) : (
+                                            <span>
+                                                Maps values directly from Excel column <Tag color="blue" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{val || '???'}</Tag>.
+                                            </span>
+                                        )}
+                                    </Text>
                                 ) : src === 'API' ? (
-                                    <Text style={{ fontSize: 12 }}>
-                                        API Search <Text strong>{txt || '???'}</Text> (Match <Text code style={{ fontSize: 10 }}>{compare || '???'}</Text>)
+                                    <Text style={{ fontSize: 12, color: '#334155' }}>
+                                        {isArray ? (
+                                            <span>
+                                                Parses Excel cell <Text strong style={{ margin: '0 2px' }}>{txt || '???'}</Text> as a JSON array, searches API dataset, and returns list of IDs matching <Text code style={{ fontSize: 11, padding: '1px 4px' }}>{compare || '???'}</Text>.
+                                            </span>
+                                        ) : (
+                                            <span>
+                                                Searches API using Excel value <Text strong style={{ margin: '0 2px' }}>{txt || '???'}</Text> and matches against property <Text code style={{ fontSize: 11, padding: '1px 4px' }}>{compare || '???'}</Text> to find the correct ID.
+                                            </span>
+                                        )}
                                     </Text>
                                 ) : src === 'Fixed' ? (
-                                    <Text style={{ fontSize: 12 }}>Static: <Tag color="gold" bordered={false} style={{ fontSize: 11 }}>{fixedVal || '???'}</Tag></Text>
+                                    <Text style={{ fontSize: 12, color: '#334155' }}>
+                                        {isArray ? (
+                                            <span>
+                                                Applies a static JSON array/list: <Tag color="gold" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{fixedVal || '???'}</Tag>.
+                                            </span>
+                                        ) : (
+                                            <span>
+                                                Applies a static value: <Tag color="gold" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{fixedVal || '???'}</Tag> to all records.
+                                            </span>
+                                        )}
+                                    </Text>
                                 ) : null}
                             </div>
                         );

@@ -76,6 +76,42 @@
     margin-bottom: 16px;
 }
 
+.mapping-table-card.empty-state {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+}
+
+.mapping-table-card.empty-state .ant-table-wrapper,
+.mapping-table-card.empty-state .ant-spin-nested-loading,
+.mapping-table-card.empty-state .ant-spin-container,
+.mapping-table-card.empty-state .ant-table,
+.mapping-table-card.empty-state .ant-table-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.mapping-table-card.empty-state .ant-table-content {
+    flex: 1;
+    height: 100%;
+}
+
+.mapping-table-card.empty-state .ant-table-content > table {
+    height: 100%;
+}
+
+.mapping-table-card.empty-state .ant-table-placeholder {
+    height: 100%;
+}
+
+.mapping-table-empty-footer {
+    padding: 16px;
+    background: #ffffff;
+    border-top: 1px solid #e2e8f0;
+}
+
 .submit-btn-large {
     height: 40px !important;
     width: 100% !important;
@@ -244,4 +280,34 @@
 
 .ant-modal-container {
     padding-top: 10px !important;
+}
+
+.ant-input.boolean-settings-input {
+    border: 1px solid #cbd5e1 !important;
+    background: #ffffff !important;
+}
+
+.ant-input.boolean-settings-input.ant-input-status-error {
+    border-color: #ff4d4f !important;
+}
+
+/* Premium Global Validation Error Highlights */
+.ant-input-status-error,
+.ant-select-status-error .ant-select-selector,
+.ant-input-status-error.ant-input-sm,
+.ant-select-status-error.ant-select-sm .ant-select-selector,
+.ant-form-item-has-error .ant-input,
+.ant-form-item-has-error .ant-select-selector,
+.ant-form-item-has-error .ant-input-sm,
+.ant-form-item-has-error .ant-select-sm .ant-select-selector {
+    border-color: #ff4d4f !important;
+    background-color: #fff2f0 !important; /* Soft premium red highlight */
+}
+
+.ant-input-status-error:focus,
+.ant-input-status-error:hover,
+.ant-form-item-has-error .ant-input:focus,
+.ant-form-item-has-error .ant-input:hover {
+    border-color: #ff7875 !important;
+    box-shadow: 0 0 0 2px rgba(255, 77, 79, 0.15) !important;
 }

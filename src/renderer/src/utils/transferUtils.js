@@ -3,7 +3,7 @@
  */
 export const normalizeString = (str) => {
     if (!str) return '';
-    
+
     // Turkish character map for folding to standard Latin equivalents
     const charMap = {
         'ı': 'i', 'I': 'i', 'İ': 'i', 'i': 'i',
@@ -13,7 +13,7 @@ export const normalizeString = (str) => {
         'ö': 'o', 'Ö': 'o',
         'ü': 'u', 'Ü': 'u'
     };
-    
+
     return String(str)
         .trim()
         .toLocaleLowerCase('tr-TR') // Crucial for Turkish I/i folding
@@ -29,13 +29,13 @@ export const normalizeString = (str) => {
  */
 export const calculateSimilarity = (str1, str2) => {
     if (!str1 || !str2) return 0;
-    
+
     // Quick check
     if (str1 === str2) return 1;
 
     const s1 = normalizeString(str1);
     const s2 = normalizeString(str2);
-    
+
     if (s1 === s2) return 1;
     if (!s1 || !s2) return 0;
 
@@ -43,7 +43,7 @@ export const calculateSimilarity = (str1, str2) => {
     // If one is a significant part of the other, give very high score
     if (s1.length > 3 && s2.length > 3) {
         if (s1.includes(s2) || s2.includes(s1)) {
-            return 0.95; 
+            return 0.95;
         }
     }
 
@@ -185,8 +185,13 @@ export const formatDateToISO = (dateObj) => {
  * @param {string} dataType 
  * @returns {any}
  */
-export const resolvePrimitiveValue = (rawVal, dataType) => {
+export const resolvePrimitiveValue = (rawVal, dataType, mapping = {}) => {
     if (rawVal === undefined || rawVal === null) {
+        if (dataType === 'Boolean') {
+            if (mapping.nonEmptyIsTrue) return false;
+            if (mapping.emptyIsFalse) return false;
+            return null;
+        }
         return null;
     }
     switch (dataType) {
@@ -200,7 +205,40 @@ export const resolvePrimitiveValue = (rawVal, dataType) => {
             const f = parseFloat(rawVal);
             return isNaN(f) ? null : f;
         case 'Boolean':
-            return String(rawVal).toLowerCase() === 'true' || rawVal === true || rawVal === 1;
+            const strVal = String(rawVal).trim().toLowerCase();
+
+            if (mapping.nonEmptyIsTrue) {
+                return strVal !== '';
+            }
+
+            if (strVal === '') {
+                if (mapping.emptyIsFalse) return false;
+                return null;
+            }
+
+            let customTrue = [];
+            if (mapping.trueValues && typeof mapping.trueValues === 'string') {
+                customTrue = mapping.trueValues.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+            }
+
+            if (customTrue.includes(strVal)) {
+                return true;
+            }
+
+            if (mapping.otherValuesAreFalse) {
+                return false;
+            }
+
+            let customFalse = [];
+            if (mapping.falseValues && typeof mapping.falseValues === 'string') {
+                customFalse = mapping.falseValues.split(',').map(v => v.trim().toLowerCase()).filter(Boolean);
+            }
+
+            if (customFalse.includes(strVal)) {
+                return false;
+            }
+
+            return null;
         default: // String
             return String(rawVal);
     }

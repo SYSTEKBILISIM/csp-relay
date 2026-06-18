@@ -35,7 +35,6 @@ export const LoginScreen = ({ onLogin }) => {
             ]);
         }
     }, []);
-
     const onFinish = async (values) => {
         setLoading(true);
 
@@ -43,14 +42,14 @@ export const LoginScreen = ({ onLogin }) => {
             // Get necessary headers
             const encryptedData = globalStore.get('encryptedData');
 
-            // Construct Body
+            // Construct Body with PascalCase properties to match Synergy API expectations
             const body = {
-                language: values.language,
-                username: values.username,
-                password: values.password,
-                rememberMe: false,
-                captcha: null,
-                captchaId: null
+                Language: values.language,
+                Username: values.username,
+                Password: values.password,
+                RememberMe: false,
+                Captcha: null,
+                CaptchaId: null
             };
 
             console.log('Login Request:', body);
@@ -65,11 +64,14 @@ export const LoginScreen = ({ onLogin }) => {
 
             console.log('Login Result:', result);
 
-            if (result.success) {
+            const isSuccess = result && (result.success || result.Success);
+
+            if (isSuccess) {
                 // Determine token based on response structure
-                let token = result.token;
-                if (!token && result.result && result.result.token) {
-                    token = result.result.token;
+                let token = result.token || result.Token;
+                const resultData = result.result || result.Result;
+                if (!token && resultData) {
+                    token = resultData.token || resultData.Token;
                 }
 
                 if (token) {
@@ -128,9 +130,8 @@ export const LoginScreen = ({ onLogin }) => {
                 }
             } else {
                 // Handle API error messages
-                throw new Error(result.message || 'Login failed');
+                throw new Error(result.message || result.Message || 'Login failed');
             }
-
         } catch (error) {
             console.error('Login Error:', error);
             messageApi.error(error.message || 'Connection failed');

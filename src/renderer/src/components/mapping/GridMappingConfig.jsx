@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Form, Row, Col, Select, Input, Typography, Table, Space, Button, Tooltip, Tag, Modal, Switch } from 'antd';
+import { Form, Row, Col, Select, Input, Typography, Table, Space, Button, Tooltip, Tag, Modal, Switch, message } from 'antd';
 import {
     LinkOutlined, BuildOutlined, TableOutlined, PlusOutlined,
     DeleteOutlined, SettingOutlined, ArrowUpOutlined, ArrowDownOutlined,
-    InteractionOutlined, InfoCircleFilled, HolderOutlined
+    InteractionOutlined, InfoCircleFilled, HolderOutlined, SearchOutlined
 } from '@ant-design/icons';
 import { MappingFields } from './MappingFields';
 import { RelatedDocumentConfig } from './RelatedDocumentConfig';
@@ -19,6 +19,9 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
     const [columnForm] = Form.useForm();
     const [isParamsModalVisible, setIsParamsModalVisible] = useState(false);
     const [apiStep, setApiStep] = useState(0);
+    const [refreshKey, setRefreshKey] = useState(0);
+
+    const [searchQuery, setSearchQuery] = useState('');
 
     const [colWidths, setColWidths] = useState({ sort: 50, name: 160, type: 180, source: 180, action: 90 });
     const [draggedOverIndex, setDraggedOverIndex] = useState(-1);
@@ -35,6 +38,7 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
         const mapping = columnData.mapping || {
             source: 'Excel',
             dataType: columnData.dataType || 'String',
+            isArray: false,
             apiType: 'Internal',
             responsePath: 'result.result',
             parameters: [],
@@ -49,7 +53,10 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
 
         columnForm.resetFields();
         setApiStep(0);
-        columnForm.setFieldsValue(mapping);
+        columnForm.setFieldsValue({
+            isArray: false,
+            ...mapping
+        });
         setIsColumnModalVisible(true);
     };
 
@@ -58,37 +65,56 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
 
         // Final guardrail for API mode
         if (innerValues.source === 'API') {
-            if (apiStep < 2) {
-                Modal.warning({
-                    title: 'Incomplete Configuration',
-                    content: 'Please complete all 3 steps (Connection -> Payload -> Mapping) before saving.',
-                });
-                return;
-            }
-            if (!innerValues.responsePath || !innerValues.valuePath) {
-                Modal.error({
-                    title: 'Missing Mapping Info',
-                    content: 'Required mapping fields (Items Path or Final ID Field) are missing in Step 3.',
-                });
+            const fieldCaptions = {
+                apiType: 'Topology',
+                apiMethod: 'Method',
+                apiUrl: innerValues.apiType === 'Internal' ? 'DataSource Name' : 'Endpoint URL',
+                responsePath: 'Items Path',
+                displayFormat: 'Match Property',
+                searchKeyTemplate: 'Excel Search Key',
+                valuePath: 'Value Path',
+                textPath: 'Text Path'
+            };
+
+            const missing = Object.keys(fieldCaptions).filter(f => !innerValues[f]);
+            if (missing.length > 0) {
+                const labels = missing.map(f => fieldCaptions[f]).join(', ');
+                message.error(`Required configuration missing: ${labels}. Please complete all steps.`);
                 return;
             }
         }
 
-        columnForm.validateFields().then(values => {
+        columnForm.validateFields().then(validatedValues => {
+            const allValues = columnForm.getFieldsValue(true);
+            const values = { ...allValues };
+            Object.keys(validatedValues).forEach(key => {
+                if (Array.isArray(validatedValues[key]) && Array.isArray(allValues[key])) {
+                    values[key] = validatedValues[key].map((item, idx) => {
+                        const originalItem = allValues[key][idx] || {};
+                        return { ...originalItem, ...item };
+                    });
+                } else if (typeof validatedValues[key] === 'object' && validatedValues[key] !== null &&
+                           typeof allValues[key] === 'object' && allValues[key] !== null) {
+                    values[key] = { ...allValues[key], ...validatedValues[key] };
+                } else {
+                    values[key] = validatedValues[key];
+                }
+            });
+
             if (values.apiType === 'Internal' && values.apiUrl && typeof constructInternalUrl === 'function') {
                 values.fullUrl = constructInternalUrl(values.apiUrl);
             }
 
-            const gridColumns = form.getFieldValue('gridColumns') || [];
-            const updatedColumns = [...gridColumns];
-            updatedColumns[activeColumnIndex] = {
-                ...updatedColumns[activeColumnIndex],
-                mapping: values,
-                type: values.type || updatedColumns[activeColumnIndex].type || 'Object',
-                dataType: values.dataType
-            };
+            // Save values individually inside Form.List row structure to prevent Form.List reconciliation from wiping it out
+            form.setFieldValue(['gridColumns', activeColumnIndex, 'mapping'], values);
+            form.setFieldValue(['gridColumns', activeColumnIndex, 'dataType'], values.dataType);
 
-            form.setFieldsValue({ gridColumns: updatedColumns });
+            const currentType = form.getFieldValue(['gridColumns', activeColumnIndex, 'type']);
+            if (values.type || !currentType) {
+                form.setFieldValue(['gridColumns', activeColumnIndex, 'type'], values.type || currentType || 'Object');
+            }
+
+            setRefreshKey(prev => prev + 1);
             setIsColumnModalVisible(false);
         });
     };
@@ -218,9 +244,17 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                 key: 'name',
                                 minWidth: colWidths.name,
                                 render: (_, field) => (
-                                    <Form.Item name={[field.name, 'name']} rules={[{ required: true, message: 'Please enter Field Name' }]} style={{ marginBottom: 0 }}>
-                                        <Input placeholder="Column Name" size="small" variant="filled" className="input-sm-fixed" style={{ fontWeight: 500 }} />
-                                    </Form.Item>
+                                    <>
+                                        <Form.Item name={[field.name, 'mapping']} hidden>
+                                            <div />
+                                        </Form.Item>
+                                        <Form.Item name={[field.name, 'dataType']} hidden>
+                                            <div />
+                                        </Form.Item>
+                                        <Form.Item name={[field.name, 'name']} rules={[{ required: true, message: 'Please enter Field Name' }]} style={{ marginBottom: 0 }}>
+                                            <Input placeholder="Column Name" size="small" variant="filled" className="input-sm-fixed" style={{ fontWeight: 500 }} />
+                                        </Form.Item>
+                                    </>
                                 )
                             },
                             {
@@ -230,12 +264,17 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                 width: colWidths.type,
                                 render: (_, field) => (
                                     <Form.Item name={[field.name, 'type']} style={{ marginBottom: 0 }}>
-                                        <Select size="small" variant="outlined" style={{ width: '100%', borderRadius: 4, padding: '5px 10px' }}>
-                                            <Option value="Object">Object</Option>
-                                            <Option value="InlineGrid">Inline Grid</Option>
-                                            <Option value="RelatedGrid">Related Grid</Option>
-                                            <Option value="RelatedDocument">Related Document</Option>
-                                        </Select>
+                                        <Select
+                                            size="small"
+                                            variant="outlined"
+                                            style={{ width: '100%', borderRadius: 4, padding: '5px 10px' }}
+                                            options={[
+                                                { label: 'Object', value: 'Object' },
+                                                { label: 'Inline Grid', value: 'InlineGrid' },
+                                                { label: 'Related Grid', value: 'RelatedGrid' },
+                                                { label: 'Related Document', value: 'RelatedDocument' }
+                                            ]}
+                                        />
                                     </Form.Item>
                                 )
                             },
@@ -257,20 +296,52 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                                     : <Tag color="warning" style={{ margin: 0 }}>Grid Setup Needed</Tag>;
                                             } else if (colData.type === 'RelatedDocument') {
                                                 summaryNode = mapping.pathCol
-                                                    ? <Tag color="purple" style={{ margin: 0 }}>File: {mapping.pathCol}</Tag>
+                                                    ? (
+                                                        <Tooltip title={`File: ${mapping.pathCol}`} mouseEnterDelay={0.3}>
+                                                            <Tag color="purple" style={{ margin: 0 }}>
+                                                                <span style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
+                                                                    File: {mapping.pathCol}
+                                                                </span>
+                                                            </Tag>
+                                                        </Tooltip>
+                                                    )
                                                     : <Tag color="warning" style={{ margin: 0 }}>Setup Needed</Tag>;
                                             } else {
                                                 if (mapping.source === 'API') {
                                                     summaryNode = mapping.apiUrl
-                                                        ? <Tag color="blue" style={{ margin: 0 }}>API Ready</Tag>
+                                                        ? (
+                                                            <Tooltip title={`API: ${mapping.apiUrl}`} mouseEnterDelay={0.3}>
+                                                                <Tag color="blue" style={{ margin: 0 }}>
+                                                                    <span style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
+                                                                        API: {mapping.apiUrl}
+                                                                    </span>
+                                                                </Tag>
+                                                            </Tooltip>
+                                                        )
                                                         : <Tag color="warning" style={{ margin: 0 }}>API Needed</Tag>;
                                                 } else if (mapping.source === 'Fixed') {
                                                     summaryNode = mapping.fixedValue
-                                                        ? <Tag color="gold" style={{ margin: 0 }}>Fixed: {mapping.fixedValue}</Tag>
+                                                        ? (
+                                                            <Tooltip title={`Fixed: ${mapping.fixedValue}`} mouseEnterDelay={0.3}>
+                                                                <Tag color="gold" style={{ margin: 0 }}>
+                                                                    <span style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
+                                                                        Fixed: {mapping.fixedValue}
+                                                                    </span>
+                                                                </Tag>
+                                                            </Tooltip>
+                                                        )
                                                         : <Tag color="warning" style={{ margin: 0 }}>Fixed Needed</Tag>;
                                                 } else {
                                                     summaryNode = mapping.valueCol
-                                                        ? <Tag color="cyan" style={{ margin: 0 }}>{mapping.valueCol}</Tag>
+                                                        ? (
+                                                            <Tooltip title={mapping.valueCol} mouseEnterDelay={0.3}>
+                                                                <Tag color="cyan" style={{ margin: 0 }}>
+                                                                    <span style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
+                                                                        {mapping.valueCol}
+                                                                    </span>
+                                                                </Tag>
+                                                            </Tooltip>
+                                                        )
                                                         : <Tag color="error" style={{ margin: 0 }}>Unmapped</Tag>;
                                                 }
                                             }
@@ -326,6 +397,16 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                             }),
                         }));
 
+                        const filteredFields = fields.filter(field => {
+                            if (!searchQuery) return true;
+                            const query = searchQuery.toLowerCase();
+                            const name = form.getFieldValue(['gridColumns', field.name, 'name']) || '';
+                            const type = form.getFieldValue(['gridColumns', field.name, 'type']) || '';
+                            const matchName = name.toLowerCase().includes(query);
+                            const matchType = type.toLowerCase().includes(query);
+                            return matchName || matchType;
+                        });
+
                         return (
                             <>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 4px 20px 4px', marginBottom: 0, borderBottom: '1px solid #f1f5f9' }}>
@@ -338,6 +419,15 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                         </div>
                                     </div>
                                     <Space size={12}>
+                                        <Input
+                                            prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+                                            placeholder="Search properties..."
+                                            allowClear
+                                            variant="filled"
+                                            value={searchQuery}
+                                            onChange={e => setSearchQuery(e.target.value)}
+                                            style={{ width: 220, borderRadius: 8 }}
+                                        />
                                         {type === 'RelatedGrid' && (() => {
                                             const formParams = form.getFieldValue('formParams') || [];
                                             const gridSheet = form.getFieldValue('gridSheet');
@@ -356,21 +446,12 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                                 </Tooltip>
                                             );
                                         })()}
-                                        <Button
-                                            type="dashed"
-                                            size="middle"
-                                            onClick={() => add()}
-                                            icon={<PlusOutlined />}
-                                            style={{ borderRadius: 8 }}
-                                        >
-                                            Add New Property
-                                        </Button>
                                     </Space>
                                 </div>
                                 <div className="mapping-table-card" style={{ marginTop: 24, flex: 'none', maxHeight: '400px', overflowY: 'auto', paddingBottom: 1 }}>
                                     <Table
                                         components={{ header: { cell: ResizableTitle } }}
-                                        dataSource={fields}
+                                        dataSource={filteredFields}
                                         columns={resizableColumns}
                                         pagination={false}
                                         size="small"
@@ -378,9 +459,10 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                         rowClassName="compact-row"
                                         locale={{ emptyText: <div style={{ padding: '32px 0', color: '#94a3b8' }}>No properties added yet. Start by clicking "Add New Property".</div> }}
                                         onRow={(record, index) => {
+                                            const isFiltered = !!searchQuery;
                                             const isDraggedOver = index === draggedOverIndex;
                                             return {
-                                                draggable: true,
+                                                draggable: !isFiltered,
                                                 className: isDraggedOver ? 'drop-row drag-row-active' : 'drag-row-active',
                                                 onDragStart: (e) => {
                                                     e.dataTransfer.effectAllowed = 'move';
@@ -410,6 +492,17 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                                 }
                                             };
                                         }}
+                                        footer={() => (
+                                            <Button
+                                                type="dashed"
+                                                block
+                                                icon={<PlusOutlined />}
+                                                onClick={() => add({ type: 'Object', mapping: { source: 'Excel' } })}
+                                                style={{ height: 40, borderRadius: 8, borderColor: '#cbd5e1', color: '#475569', background: 'transparent' }}
+                                            >
+                                                Add New Property
+                                            </Button>
+                                        )}
                                     />
                                 </div>
                             </>
@@ -443,8 +536,8 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
 
             <Modal
                 title={
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <div style={{ background: '#e0f2fe', padding: '6px', borderRadius: '8px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, lineHeight: 'normal' }}>
+                        <div style={{ background: '#e0f2fe', padding: '6px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             <SettingOutlined style={{ color: '#0369a1' }} />
                         </div>
                         <Text strong style={{ fontSize: 16 }}>
@@ -462,7 +555,7 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                 zIndex={1002}
                 destroyOnHidden
             >
-                <Form form={columnForm} layout="vertical" initialValues={{ source: 'Excel', apiType: 'Internal' }}>
+                <Form form={columnForm} layout="vertical" initialValues={{ source: 'Excel', apiType: 'Internal' }} preserve={true}>
                     {(() => {
                         const currentInnerType = form.getFieldValue(['gridColumns', activeColumnIndex, 'type']) || 'Object';
 

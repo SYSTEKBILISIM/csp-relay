@@ -221,6 +221,8 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
 
             const exportData = [];
             for (const l of logs) {
+                if (l.status === 'Pending') continue;
+
                 let details = {};
                 try {
                     details = await getLogDetailsAsync(l.key) || {};
@@ -244,6 +246,11 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     Response: details.response ? (typeof details.response === 'object' ? JSON.stringify(details.response, null, 2) : details.response) : '',
                     OperationTree: details.executionLog ? details.executionLog.map(step => `[${step.status}] ${step.step} - ${step.details}`).join(' | ') : ''
                 });
+            }
+
+            if (exportData.length === 0) {
+                message.warning({ content: 'No processed logs to export.', key: 'exportLogs' });
+                return;
             }
 
             const ws = XLSX.utils.json_to_sheet(exportData);
@@ -304,6 +311,11 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     },
                     rowData
                 });
+            }
+
+            if (fullResults.length === 0) {
+                message.warning({ content: 'No processed logs to export.', key: 'exportJson' });
+                return;
             }
 
             const exportObj = {

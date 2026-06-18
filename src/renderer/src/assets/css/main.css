@@ -484,6 +484,10 @@ td.ant-table-cell:has(.ant-empty-description) {
     min-height: 0;
 }
 
+.log-details-tabs .ant-tabs-tabpane-hidden {
+    display: none !important;
+}
+
 .log-details-tabs .ant-table-wrapper,
 .log-details-tabs .ant-spin-nested-loading,
 .log-details-tabs .ant-spin-container,

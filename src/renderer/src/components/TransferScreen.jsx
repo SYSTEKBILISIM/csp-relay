@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, Form, Button, Typography, Select, Table, Input, Modal, Space, Row, Col, Tooltip, Radio, Divider, Badge, message, Collapse, theme, Tag, Segmented, Tabs } from 'antd';
-import { InteractionOutlined, PlusOutlined, DeleteOutlined, SettingOutlined, ArrowUpOutlined, ArrowDownOutlined, LinkOutlined, DownloadOutlined, UploadOutlined, BuildOutlined, ArrowRightOutlined, TableOutlined, InfoCircleOutlined, PushpinOutlined, HolderOutlined } from '@ant-design/icons';
+import { InteractionOutlined, PlusOutlined, DeleteOutlined, SettingOutlined, ArrowUpOutlined, ArrowDownOutlined, LinkOutlined, DownloadOutlined, UploadOutlined, BuildOutlined, ArrowRightOutlined, TableOutlined, InfoCircleOutlined, PushpinOutlined, HolderOutlined, SearchOutlined } from '@ant-design/icons';
 import { globalStore } from '../store/GlobalStore';
 import '../assets/css/TransferScreen.css';
 
@@ -249,6 +249,7 @@ export const TransferScreen = ({ onFinish, initialData }) => {
         const existingMap = record.mapping;
         const mapping = existingMap || {
             source: 'Excel',
+            isArray: false,
             apiType: 'Internal',
             apiMethod: 'GET',
             responsePath: 'result.result',
@@ -267,11 +268,14 @@ export const TransferScreen = ({ onFinish, initialData }) => {
             relatedDocIdCol: 'RELATIONDOCUMENTID'
         };
         setValueSource(mapping.source || 'Excel');
-        setCurrentObjectMapping(mapping);
+        setCurrentObjectMapping({
+            isArray: false,
+            ...mapping
+        });
         setIsModalVisible(true);
     };
 
-
+    const [searchQuery, setSearchQuery] = useState('');
 
     const columns = [
         {
@@ -311,12 +315,13 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                     value={text}
                     onChange={(value) => updateObject(record.key, 'type', value)}
                     className="select-sm-fixed definiation-type-column"
-                >
-                    <Option value="Object">Object</Option>
-                    <Option value="InlineGrid">Inline Grid</Option>
-                    <Option value="RelatedGrid">Related Grid</Option>
-                    <Option value="RelatedDocument">Related Document</Option>
-                </Select>
+                    options={[
+                        { label: 'Object', value: 'Object' },
+                        { label: 'Inline Grid', value: 'InlineGrid' },
+                        { label: 'Related Grid', value: 'RelatedGrid' },
+                        { label: 'Related Document', value: 'RelatedDocument' }
+                    ]}
+                />
             )
         },
         {
@@ -334,20 +339,52 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                         : <Tag color="warning" style={{ margin: 0 }}>Grid Setup Needed</Tag>;
                 } else if (record.type === 'RelatedDocument') {
                     summaryNode = mapping.pathCol
-                        ? <Tag color="purple" style={{ margin: 0 }}>File: {mapping.pathCol}</Tag>
+                        ? (
+                            <Tooltip title={`File: ${mapping.pathCol}`} mouseEnterDelay={0.3}>
+                                <Tag color="purple" style={{ margin: 0 }}>
+                                    <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
+                                        File: {mapping.pathCol}
+                                    </span>
+                                </Tag>
+                            </Tooltip>
+                        )
                         : <Tag color="warning" style={{ margin: 0 }}>Setup Needed</Tag>;
                 } else {
                     if (mapping.source === 'API') {
                         summaryNode = mapping.apiUrl
-                            ? <Tag color="blue" style={{ margin: 0 }}>API: {mapping.apiUrl}</Tag>
+                            ? (
+                                <Tooltip title={`API: ${mapping.apiUrl}`} mouseEnterDelay={0.3}>
+                                    <Tag color="blue" style={{ margin: 0 }}>
+                                        <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
+                                            API: {mapping.apiUrl}
+                                        </span>
+                                    </Tag>
+                                </Tooltip>
+                            )
                             : <Tag color="warning" style={{ margin: 0 }}>API: Config Needed</Tag>;
                     } else if (mapping.source === 'Fixed') {
                         summaryNode = mapping.fixedValue
-                            ? <Tag color="gold" style={{ margin: 0 }}>Fixed: {mapping.fixedValue}</Tag>
+                            ? (
+                                <Tooltip title={`Fixed: ${mapping.fixedValue}`} mouseEnterDelay={0.3}>
+                                    <Tag color="gold" style={{ margin: 0 }}>
+                                        <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
+                                            Fixed: {mapping.fixedValue}
+                                        </span>
+                                    </Tag>
+                                </Tooltip>
+                            )
                             : <Tag color="warning" style={{ margin: 0 }}>Fixed: Enter Value</Tag>;
                     } else {
                         summaryNode = mapping.valueCol
-                            ? <Tag color="cyan" style={{ margin: 0 }}>{mapping.valueCol}</Tag>
+                            ? (
+                                <Tooltip title={mapping.valueCol} mouseEnterDelay={0.3}>
+                                    <Tag color="cyan" style={{ margin: 0 }}>
+                                        <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
+                                            {mapping.valueCol}
+                                        </span>
+                                    </Tag>
+                                </Tooltip>
+                            )
                             : <Tag color="error" style={{ margin: 0 }}>Unmapped</Tag>;
                     }
                 }
@@ -495,18 +532,30 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                         style={{ borderRadius: 8 }}
                                     />
                                 </Tooltip>
-                                <Button type="dashed" icon={<PlusOutlined />} onClick={addObject} size="middle" style={{ borderRadius: 8 }}>
-                                    Add Object
-                                </Button>
+                                <Input
+                                    prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+                                    placeholder="Search objects..."
+                                    allowClear
+                                    variant="filled"
+                                    value={searchQuery}
+                                    onChange={e => setSearchQuery(e.target.value)}
+                                    style={{ width: 220, borderRadius: 8 }}
+                                />
                             </Space>
                         </div>
 
                         {/* Objects Mapping Table - Scrollable Body */}
-                        <div ref={tableContainerRef} className="mapping-table-card">
+                        <div ref={tableContainerRef} className={`mapping-table-card ${objects.length === 0 ? 'empty-state' : ''}`}>
                             <Table
                                 components={{ header: { cell: ResizableTitle } }}
                                 tableLayout="fixed"
-                                dataSource={objects}
+                                dataSource={objects.filter(obj => {
+                                    if (!searchQuery) return true;
+                                    const query = searchQuery.toLowerCase();
+                                    const matchName = (obj.name || '').toLowerCase().includes(query);
+                                    const matchType = (obj.type || '').toLowerCase().includes(query);
+                                    return matchName || matchType;
+                                })}
                                 columns={columns.map(col => ({
                                     ...col,
                                     onHeaderCell: column => ({
@@ -519,9 +568,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                 rowKey="key"
                                 style={{ fontSize: '12px', width: '100%' }}
                                 onRow={(record, index) => {
+                                    const isFiltered = !!searchQuery;
                                     const isDraggedOver = index === draggedOverIndex;
                                     return {
-                                        draggable: true,
+                                        draggable: !isFiltered,
                                         className: isDraggedOver ? 'drop-row drag-row-active' : 'drag-row-active',
                                         onDragStart: (e) => {
                                             e.dataTransfer.effectAllowed = 'move';
@@ -554,7 +604,31 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                         }
                                     };
                                 }}
+                                footer={objects.length > 0 ? () => (
+                                    <Button
+                                        type="dashed"
+                                        block
+                                        icon={<PlusOutlined />}
+                                        onClick={addObject}
+                                        style={{ height: 40, borderRadius: 8, borderColor: '#cbd5e1', color: '#475569', background: 'transparent' }}
+                                    >
+                                        Add New Object
+                                    </Button>
+                                ) : undefined}
                             />
+                            {objects.length === 0 && (
+                                <div className="mapping-table-empty-footer">
+                                    <Button
+                                        type="dashed"
+                                        block
+                                        icon={<PlusOutlined />}
+                                        onClick={addObject}
+                                        style={{ height: 40, borderRadius: 8, borderColor: '#cbd5e1', color: '#475569', background: 'transparent' }}
+                                    >
+                                        Add New Object
+                                    </Button>
+                                </div>
+                            )}
                         </div>
 
                         {/* Footer / Submit */}

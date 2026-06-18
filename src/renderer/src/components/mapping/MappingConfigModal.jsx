@@ -27,12 +27,16 @@ export const MappingConfigModal = ({
             setApiStep(0); // Reset API steps
             // Check if initialValues has keys, otherwise use defaults
             if (initialValues && Object.keys(initialValues).length > 0 && initialValues.source) {
-                form.setFieldsValue(initialValues);
+                form.setFieldsValue({
+                    isArray: false,
+                    ...initialValues
+                });
             } else {
                 // Default values if new or empty
                 form.setFieldsValue({ 
                     source: 'Excel', 
                     dataType: 'String',
+                    isArray: false,
                     apiMethod: 'POST', 
                     apiType: 'Internal', 
                     responsePath: 'result.result',
@@ -70,8 +74,25 @@ export const MappingConfigModal = ({
         form.validateFields().then(validatedValues => {
             // Use getFieldsValue(true) to ensure unmounted step data is preserved
             const allValues = form.getFieldsValue(true);
-            const values = { ...allValues, ...validatedValues };
+            const values = { ...allValues };
+            Object.keys(validatedValues).forEach(key => {
+                if (Array.isArray(validatedValues[key]) && Array.isArray(allValues[key])) {
+                    values[key] = validatedValues[key].map((item, idx) => {
+                        const originalItem = allValues[key][idx] || {};
+                        return { ...originalItem, ...item };
+                    });
+                } else if (typeof validatedValues[key] === 'object' && validatedValues[key] !== null &&
+                           typeof allValues[key] === 'object' && allValues[key] !== null) {
+                    values[key] = { ...allValues[key], ...validatedValues[key] };
+                } else {
+                    values[key] = validatedValues[key];
+                }
+            });
             onSave(values);
+        }).catch(errorInfo => {
+            if (errorInfo.errorFields && errorInfo.errorFields.length > 0) {
+                form.scrollToField(errorInfo.errorFields[0].name, { behavior: 'smooth', block: 'center' });
+            }
         });
     };
 

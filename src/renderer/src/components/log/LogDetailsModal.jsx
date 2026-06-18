@@ -120,7 +120,7 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                 width={1100}
                 style={{ top: 50 }}
                 styles={{
-                    header: { borderBottom: '1px solid #f1f5f9', padding: '16px 24px' },
+                    header: { borderBottom: '1px solid #f1f5f9', padding: '16px 24px', userSelect: 'text' },
                     body: {
                         padding: '8px 24px 24px 24px',
                         height: 'calc(100vh - 180px)',
@@ -128,7 +128,8 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                         maxHeight: '620px',
                         display: 'flex',
                         flexDirection: 'column',
-                        overflowY: 'hidden'
+                        overflowY: 'hidden',
+                        userSelect: 'text'
                     }
                 }}
             >
@@ -138,11 +139,13 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                             {selectedLog.warnings && selectedLog.warnings.length > 0 && (
                                 <div style={{ marginBottom: 16, padding: '12px 16px', background: '#fffbeb', border: '1px solid #fef3c7', borderRadius: 10, display: 'flex', gap: 12 }}>
                                     <InfoCircleOutlined style={{ color: '#f59e0b', marginTop: 3 }} />
-                                    <div>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
                                         <Text strong style={{ color: '#92400e', fontSize: 13 }}>API Mapping Warnings</Text>
-                                        <ul style={{ margin: '4px 0 0 0', paddingLeft: 18, fontSize: 12, color: '#b45309' }}>
-                                            {selectedLog.warnings.map((w, idx) => <li key={idx}>{w}</li>)}
-                                        </ul>
+                                        <div style={{ maxHeight: '150px', overflowY: 'auto', marginTop: 6, paddingRight: 4 }}>
+                                            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#b45309', lineHeight: '1.6' }}>
+                                                {selectedLog.warnings.map((w, idx) => <li key={idx} style={{ marginBottom: 4 }}>{w}</li>)}
+                                            </ul>
+                                        </div>
                                     </div>
                                 </div>
                             )}
@@ -157,7 +160,9 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                                     border: '1px solid #e2e8f0',
                                     fontSize: 13,
                                     lineHeight: '1.6',
-                                    color: '#334155'
+                                    color: '#334155',
+                                    maxHeight: '100px',
+                                    overflowY: 'auto'
                                 }}>
                                     {selectedLog.message}
                                 </div>
@@ -299,7 +304,7 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                 width={950}
                 style={{ top: 50 }}
                 styles={{
-                    header: { borderBottom: '1px solid #f1f5f9', padding: '16px 24px' },
+                    header: { borderBottom: '1px solid #f1f5f9', padding: '16px 24px', userSelect: 'text' },
                     body: {
                         padding: 0,
                         height: 'calc(100vh - 250px)',
@@ -307,7 +312,8 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                         maxHeight: '550px',
                         display: 'flex',
                         flexDirection: 'column',
-                        overflowY: 'hidden'
+                        overflowY: 'hidden',
+                        userSelect: 'text'
                     }
                 }}
             >
