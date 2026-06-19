@@ -30,16 +30,20 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
                 Rows: obj.Rows || []
             });
         } else if (obj.Type === 'RelatedDocument') {
+            const items = [];
+            if (Array.isArray(obj.Items)) {
+                items.push(...obj.Items);
+            } else {
+                items.push({
+                    Name: obj.Name,
+                    ContentType: obj.ContentType,
+                    Extension: obj.Extension,
+                    Data: obj.Data
+                });
+            }
             relatedDocs.push({
                 FieldName: obj.FieldName,
-                Items: [
-                    {
-                        Name: obj.Name,
-                        ContentType: obj.ContentType,
-                        Extension: obj.Extension,
-                        Data: obj.Data
-                    }
-                ]
+                Items: items
             });
         } else {
             formObjects.push({

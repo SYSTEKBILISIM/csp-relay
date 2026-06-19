@@ -38,7 +38,7 @@ export const RelatedDocumentConfig = ({ form, excelColumns = [] }) => {
                     optionFilterProp="children"
                     style={{ width: '100%' }}
                 >
-                    {excelColumns.map(col => (
+                    {(excelColumns || []).filter(col => col !== undefined && col !== null && col !== '').map(col => (
                         <Option key={col} value={col}>{col}</Option>
                     ))}
                 </Select>

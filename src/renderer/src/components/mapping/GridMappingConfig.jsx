@@ -156,7 +156,7 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                             style={{ marginBottom: 0 }}
                         >
                             <Select showSearch placeholder="Select Column" variant="filled">
-                                {currentColumns.map(col => <Option key={col} value={col}>{col}</Option>)}
+                                {(currentColumns || []).filter(col => col !== undefined && col !== null && col !== '').map(col => <Option key={col} value={col}>{col}</Option>)}
                             </Select>
                         </Form.Item>
                     </Col>
@@ -174,7 +174,7 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                         style={{ marginBottom: 0 }}
                                     >
                                         <Select showSearch placeholder="Select Column" variant="filled">
-                                            {cols.map(col => <Option key={col} value={col}>{col}</Option>)}
+                                            {cols.filter(col => col !== undefined && col !== null && col !== '').map(col => <Option key={col} value={col}>{col}</Option>)}
                                         </Select>
                                     </Form.Item>
                                 );
@@ -555,7 +555,7 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                 zIndex={1002}
                 destroyOnHidden
             >
-                <Form form={columnForm} layout="vertical" initialValues={{ source: 'Excel', apiType: 'Internal' }} preserve={true}>
+                <Form form={columnForm} layout="vertical" preserve={true}>
                     {(() => {
                         const currentInnerType = form.getFieldValue(['gridColumns', activeColumnIndex, 'type']) || 'Object';
 

@@ -4,6 +4,26 @@ import { constructPayload } from './PayloadFactory';
 
 const RELAY_CSP_APP_NAME = 'Systek_SynergyCSPRelay';
 
+async function fetchWithRetry(url, options, maxRetries = 3) {
+    for (let i = 0; i <= maxRetries; i++) {
+        try {
+            const res = await fetch(url, options);
+            if ((res.status === 502 || res.status === 503 || res.status === 504) && i < maxRetries) {
+                console.warn(`[API] ${res.status} Error on ${url}. Retrying ${i + 1}/${maxRetries}...`);
+                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i))); // 1s, 2s, 4s
+                continue;
+            }
+            return res;
+        } catch (err) {
+            if (i < maxRetries) {
+                console.warn(`[API] Network error on ${url}. Retrying ${i + 1}/${maxRetries}...`, err);
+                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+                continue;
+            }
+            throw err;
+        }
+    }
+}
 async function submitRelatedGridRow(projectName, formName, formFields, globalStore, executionLog = [], loginAs = null) {
     const logEntry = { key: `rg_${Date.now()}_${Math.random()}`, step: 'RelatedGrid Submit', details: `Form: ${formName}`, status: 'Pending' };
     executionLog.push(logEntry);
@@ -42,7 +62,7 @@ async function submitRelatedGridRow(projectName, formName, formFields, globalSto
     };
 
     try {
-        const response = await fetch(`${baseUrl}/CreateForm`, {
+        const response = await fetchWithRetry(`${baseUrl}/CreateForm`, {
             method: 'POST',
             headers,
             body: JSON.stringify(payload)
@@ -345,7 +365,7 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
             if (fetchOptions.method !== 'GET' && fetchOptions.method !== 'HEAD') {
                 fetchOptions.body = resolvedBody;
             }
-            const res = await fetch(resolvedUrl, fetchOptions);
+            const res = await fetchWithRetry(resolvedUrl, fetchOptions);
             if (res.ok) {
                 const json = await res.json();
                 apiResultList = _.get(json, mapping.responsePath || 'result.result') || [];
@@ -594,7 +614,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
                     fetchOptions.body = resolvedBody;
                 }
 
-                const res = await fetch(resolvedUrl, fetchOptions);
+                const res = await fetchWithRetry(resolvedUrl, fetchOptions);
                 if (res.ok) {
                     const json = await res.json();
                     apiResultList = _.get(json, mapping.responsePath || 'result.result') || [];
@@ -829,30 +849,50 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     if (colType === 'RelatedDocument') {
                         const pathCol = colDef.mapping?.pathCol;
                         if (pathCol) {
-                            const filePath = String(gridRow[pathCol] || '').trim();
-                            if (filePath && window.api?.readFileAsBase64) {
-                                const fileResult = await window.api.readFileAsBase64(filePath);
-                                if (fileResult.success) {
+                            const filePathRaw = String(gridRow[pathCol] || '').trim();
+                            if (filePathRaw && window.api?.readFileAsBase64) {
+                                let filePaths = [];
+                                try {
+                                    const parsed = JSON.parse(filePathRaw);
+                                    if (Array.isArray(parsed)) {
+                                        filePaths = parsed.map(p => String(p || '').trim()).filter(Boolean);
+                                    } else {
+                                        filePaths = [filePathRaw];
+                                    }
+                                } catch (e) {
+                                    filePaths = [filePathRaw];
+                                }
+
+                                const resolvedItems = [];
+                                for (const filePath of filePaths) {
+                                    const fileResult = await window.api.readFileAsBase64(filePath);
+                                    if (fileResult.success) {
+                                        resolvedItems.push({
+                                            Name: fileResult.name,
+                                            ContentType: fileResult.contentType,
+                                            Extension: fileResult.extension,
+                                            Data: fileResult.data
+                                        });
+                                    } else {
+                                        const errMsg = `RelatedDocument '${colDef.name}': failed to read file "${filePath}" - ${fileResult.error || 'Unknown error'}`;
+                                        warnings.push(errMsg);
+                                        executionLog.push({
+                                            key: `reldoc_err_${Date.now()}_${Math.random()}`,
+                                            step: 'RelatedDocument Read',
+                                            details: errMsg,
+                                            status: 'Warning'
+                                        });
+                                    }
+                                }
+
+                                if (resolvedItems.length > 0) {
                                     rowObjects.push({
                                         FieldName: colDef.name,
                                         Type: 'RelatedDocument',
-                                        Name: fileResult.name,
-                                        ContentType: fileResult.contentType,
-                                        Extension: fileResult.extension,
-                                        Data: fileResult.data
-                                    });
-                                } else {
-                                    // Log failure so it's visible in the Operation Tree
-                                    const errMsg = `RelatedDocument '${colDef.name}': failed to read file "${filePath}" - ${fileResult.error || 'Unknown error'}`;
-                                    warnings.push(errMsg);
-                                    executionLog.push({
-                                        key: `reldoc_err_${Date.now()}_${Math.random()}`,
-                                        step: 'RelatedDocument Read',
-                                        details: errMsg,
-                                        status: 'Warning'
+                                        Items: resolvedItems
                                     });
                                 }
-                            } else if (filePath && !window.api?.readFileAsBase64) {
+                            } else if (filePathRaw && !window.api?.readFileAsBase64) {
                                 const errMsg = `RelatedDocument '${colDef.name}': readFileAsBase64 API not available`;
                                 warnings.push(errMsg);
                             }
@@ -903,12 +943,16 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                             };
                             relatedDocs.push(relatedDocsMap[obj.FieldName]);
                         }
-                        relatedDocsMap[obj.FieldName].Items.push({
-                            Name: obj.Name || 'Document.pdf',    // Default fallback to prevent crash
-                            ContentType: obj.ContentType || 'application/octet-stream',
-                            Extension: obj.Extension || '.pdf',
-                            Data: obj.Data
-                        });
+                        if (Array.isArray(obj.Items)) {
+                            relatedDocsMap[obj.FieldName].Items.push(...obj.Items);
+                        } else {
+                            relatedDocsMap[obj.FieldName].Items.push({
+                                Name: obj.Name || 'Document.pdf',    // Default fallback to prevent crash
+                                ContentType: obj.ContentType || 'application/octet-stream',
+                                Extension: obj.Extension || '.pdf',
+                                Data: obj.Data
+                            });
+                        }
                     } else {
                         objects.push({
                             FieldName: obj.FieldName,
@@ -1061,29 +1105,50 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 } else if (type === 'RelatedDocument') {
                     const pathCol = mapping.pathCol;
                     if (pathCol) {
-                        const filePath = String(rowData[pathCol] || '').trim();
-                        if (filePath && window.api?.readFileAsBase64) {
-                            const fileResult = await window.api.readFileAsBase64(filePath);
-                            if (fileResult.success) {
+                        const filePathRaw = String(rowData[pathCol] || '').trim();
+                        if (filePathRaw && window.api?.readFileAsBase64) {
+                            let filePaths = [];
+                            try {
+                                const parsed = JSON.parse(filePathRaw);
+                                if (Array.isArray(parsed)) {
+                                    filePaths = parsed.map(p => String(p || '').trim()).filter(Boolean);
+                                } else {
+                                    filePaths = [filePathRaw];
+                                }
+                            } catch (e) {
+                                filePaths = [filePathRaw];
+                            }
+
+                            const resolvedItems = [];
+                            for (const filePath of filePaths) {
+                                const fileResult = await window.api.readFileAsBase64(filePath);
+                                if (fileResult.success) {
+                                    resolvedItems.push({
+                                        Name: fileResult.name,
+                                        ContentType: fileResult.contentType,
+                                        Extension: fileResult.extension,
+                                        Data: fileResult.data
+                                    });
+                                } else {
+                                    const errMsg = `RelatedDocument '${def.name}': failed to read file "${filePath}" - ${fileResult.error || 'Unknown error'}`;
+                                    warnings.push(errMsg);
+                                    executionLog.push({
+                                        key: `reldoc_err_${Date.now()}_${Math.random()}`,
+                                        step: 'RelatedDocument Read',
+                                        details: errMsg,
+                                        status: 'Warning'
+                                    });
+                                }
+                            }
+
+                            if (resolvedItems.length > 0) {
                                 rowObj = {
                                     FieldName: def.name,
                                     Type: 'RelatedDocument',
-                                    Name: fileResult.name,
-                                    ContentType: fileResult.contentType,
-                                    Extension: fileResult.extension,
-                                    Data: fileResult.data
+                                    Items: resolvedItems
                                 };
-                            } else {
-                                const errMsg = `RelatedDocument '${def.name}': failed to read file "${filePath}" - ${fileResult.error || 'Unknown error'}`;
-                                warnings.push(errMsg);
-                                executionLog.push({
-                                    key: `reldoc_err_${Date.now()}_${Math.random()}`,
-                                    step: 'RelatedDocument Read',
-                                    details: errMsg,
-                                    status: 'Warning'
-                                });
                             }
-                        } else if (!filePath) {
+                        } else if (!filePathRaw) {
                             console.warn(`[RelatedDocument] No file path in column "${pathCol}" for this row.`);
                         }
                     }
@@ -1144,7 +1209,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         if (encryptedData) headers['bimser-encrypted-data'] = encryptedData;
         headers['bimser-language'] = userLang;
 
-        const response = await fetch(`${baseUrl}/${endpointStr}`, {
+        const response = await fetchWithRetry(`${baseUrl}/${endpointStr}`, {
             method: 'POST',
             headers,
             body: JSON.stringify(payload)

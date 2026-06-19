@@ -112,40 +112,62 @@ export const TransferScreen = ({ onFinish, initialData }) => {
 
         console.log('TransferScreen Mounted. InitialData:', initialData);
 
+        // Determine source: initialData or localStorage recovery (only after ErrorBoundary dismiss)
+        let restoreData = initialData;
+        if (!restoreData || (!restoreData.mainSheet && (!restoreData.objects || restoreData.objects.length === 0))) {
+            const isErrorRecovery = sessionStorage.getItem('error_recovery_pending') === 'true';
+            if (isErrorRecovery) {
+                // Recover from localStorage only after ErrorBoundary "Kapat ve Devam Et"
+                try {
+                    const savedConfig = localStorage.getItem('temp_transfer_config');
+                    if (savedConfig) {
+                        const parsed = JSON.parse(savedConfig);
+                        if (parsed && (parsed.mainSheet || (parsed.objects && parsed.objects.length > 0))) {
+                            restoreData = parsed;
+                            console.log('Recovering from localStorage after error dismiss...');
+                        }
+                    }
+                } catch (e) {
+                    console.warn('Failed to recover from localStorage:', e);
+                }
+                sessionStorage.removeItem('error_recovery_pending');
+            }
+        }
+
         // Restore State or Auto-Select
-        if (initialData && (initialData.mainSheet || (initialData.objects && initialData.objects.length > 0))) {
-            console.log('Restoring from initialData...');
-            if (initialData.mainSheet) {
-                setMainSheet(initialData.mainSheet);
-                form.setFieldsValue({ mainSheet: initialData.mainSheet });
+        if (restoreData && (restoreData.mainSheet || (restoreData.objects && restoreData.objects.length > 0))) {
+            console.log('Restoring state...');
+            if (restoreData.mainSheet) {
+                setMainSheet(restoreData.mainSheet);
+                form.setFieldsValue({ mainSheet: restoreData.mainSheet });
             }
-            if (initialData.mainIdColumn) {
-                setMainIdColumn(initialData.mainIdColumn);
-                form.setFieldsValue({ mainIdColumn: initialData.mainIdColumn });
+            if (restoreData.mainIdColumn) {
+                setMainIdColumn(restoreData.mainIdColumn);
+                form.setFieldsValue({ mainIdColumn: restoreData.mainIdColumn });
             }
-            if (initialData.objects) {
-                setObjects(initialData.objects);
+            if (restoreData.objects) {
+                setObjects(restoreData.objects);
             }
-            if (initialData.flowParams) {
-                setFlowParams(initialData.flowParams);
+            if (restoreData.flowParams) {
+                setFlowParams(restoreData.flowParams);
             }
-            if (initialData.formParams) {
-                setFormParams(initialData.formParams);
+            if (restoreData.formParams) {
+                setFormParams(restoreData.formParams);
             }
-            if (initialData.loginAsEnabled !== undefined) {
-                setLoginAsEnabled(initialData.loginAsEnabled);
+            if (restoreData.loginAsEnabled !== undefined) {
+                setLoginAsEnabled(restoreData.loginAsEnabled);
             }
-            if (initialData.loginAsColumn) {
-                setLoginAsColumn(initialData.loginAsColumn);
+            if (restoreData.loginAsColumn) {
+                setLoginAsColumn(restoreData.loginAsColumn);
             }
-            if (initialData.apiMatchThreshold !== undefined) {
-                setApiMatchThreshold(initialData.apiMatchThreshold);
+            if (restoreData.apiMatchThreshold !== undefined) {
+                setApiMatchThreshold(restoreData.apiMatchThreshold);
             }
-            if (initialData.apiCacheLimit !== undefined) {
-                setApiCacheLimit(initialData.apiCacheLimit);
+            if (restoreData.apiCacheLimit !== undefined) {
+                setApiCacheLimit(restoreData.apiCacheLimit);
             }
-            if (initialData.relatedGridChunkSize !== undefined) {
-                setRelatedGridChunkSize(initialData.relatedGridChunkSize);
+            if (restoreData.relatedGridChunkSize !== undefined) {
+                setRelatedGridChunkSize(restoreData.relatedGridChunkSize);
             }
         } else if (storedSheets.length > 0 && !mainSheet) {
             // Only auto-select if no state exists
@@ -153,6 +175,37 @@ export const TransferScreen = ({ onFinish, initialData }) => {
             form.setFieldsValue({ mainSheet: storedSheets[0] });
         }
     }, [initialData]);
+
+    // Auto-save definition configurations to localStorage for disaster recovery
+    useEffect(() => {
+        if (objects.length > 0 || mainSheet || flowParams.length > 0 || formParams.length > 0) {
+            const tempConfig = {
+                mainSheet,
+                mainIdColumn,
+                objects,
+                flowParams,
+                formParams,
+                loginAsEnabled,
+                loginAsColumn,
+                apiMatchThreshold,
+                apiCacheLimit,
+                relatedGridChunkSize
+            };
+            localStorage.setItem('temp_transfer_config', JSON.stringify(tempConfig));
+        }
+    }, [
+        mainSheet,
+        mainIdColumn,
+        objects,
+        flowParams,
+        formParams,
+        loginAsEnabled,
+        loginAsColumn,
+        apiMatchThreshold,
+        apiCacheLimit,
+        relatedGridChunkSize
+    ]);
+
     // Helper functions removed as they are now in the hook
 
     // Export Configuration

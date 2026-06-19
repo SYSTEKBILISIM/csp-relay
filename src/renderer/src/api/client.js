@@ -32,11 +32,31 @@ export class ApiClient {
 
         console.log(`[API] ${config.method || 'GET'} ${url}`, config.body ? config.body : '');
 
-        try {
-            const response = await fetch(url, config);
+        const maxRetries = 3;
+        let response = null;
 
+        for (let i = 0; i <= maxRetries; i++) {
+            try {
+                response = await fetch(url, config);
+                if ((response.status === 502 || response.status === 503 || response.status === 504) && i < maxRetries) {
+                    console.warn(`[API] ${response.status} Error on ${url}. Retrying ${i + 1}/${maxRetries}...`);
+                    await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+                    continue;
+                }
+                break;
+            } catch (err) {
+                if (i < maxRetries) {
+                    console.warn(`[API] Network error on ${url}. Retrying ${i + 1}/${maxRetries}...`, err);
+                    await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+                    continue;
+                }
+                throw err;
+            }
+        }
+
+        try {
             // Capture 'bimser-encrypted-data' header if present
-            const encryptedData = response.headers.get('bimser-encrypted-data');
+            const encryptedData = response?.headers?.get('bimser-encrypted-data');
             if (encryptedData) {
                 console.log('[API] Captured Encrypted Data Header');
                 globalStore.set('encryptedData', encryptedData);

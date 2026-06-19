@@ -168,7 +168,8 @@
 
 /* Global compactness for small antd inputs in this screen */
 .ant-input-sm,
-.ant-select-sm .ant-select-selector {
+.ant-select-sm .ant-select-selector,
+.ant-input-affix-wrapper-sm {
     height: 32px !important;
     min-height: 32px !important;
     padding: 0 10px !important;
@@ -178,7 +179,38 @@
     box-sizing: border-box !important;
     border: 1px solid #eef2f6 !important;
     background: #f8fafc !important;
-    border-radius: 4px !important;
+    border-radius: 6px !important;
+}
+
+.ant-input-affix-wrapper-sm .ant-input-sm {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    height: auto !important;
+}
+
+.mapping-autocomplete .ant-select-selector {
+    height: 32px !important;
+    min-height: 32px !important;
+    padding: 0 10px !important;
+    font-size: 13px !important;
+    display: flex !important;
+    align-items: center !important;
+    box-sizing: border-box !important;
+    border: 1px solid #eef2f6 !important;
+    background: #f8fafc !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+}
+
+/* Override focus and hover shadow/outline on AutoComplete */
+.mapping-autocomplete:hover .ant-select-selector,
+.mapping-autocomplete.ant-select-focused .ant-select-selector,
+.mapping-autocomplete .ant-select-selector:focus,
+.mapping-autocomplete .ant-select-selector:active {
+    border-color: #3b82f6 !important; /* Match default focus border color */
+    box-shadow: none !important;
+    outline: none !important;
 }
 
 .ant-select-sm .ant-select-selection-item {

@@ -30,6 +30,36 @@ export const MappingFields = ({
 
     // Ref to track the state of inputs BEFORE onSelect fires
     const lastSearchValues = React.useRef({});
+    const inputRefs = React.useRef({});
+    const filterCache = React.useRef({ inputValue: null, scopeColumns: null, hasAnyMatch: false, searchVal: '' });
+
+    const memoizedOptions = React.useMemo(() => {
+        return (scopeColumns || [])
+            .filter(col => col !== undefined && col !== null && col !== '')
+            .map(col => ({ value: `{{${col}}}` }));
+    }, [scopeColumns]);
+
+    const getNestedValue = (obj, path) => {
+        if (!path || !obj) return undefined;
+        const keys = Array.isArray(path) ? path : [path];
+        let current = obj;
+        for (const key of keys) {
+            if (current === null || current === undefined) return undefined;
+            current = current[key];
+        }
+        return current;
+    };
+
+    const shouldFormUpdate = (prev, curr) => {
+        const fields = ["source", "dataType", "apiType", "apiUrl", "nonEmptyIsTrue", "otherValuesAreFalse", "parameters"];
+        for (const field of fields) {
+            const path = getName(field);
+            if (JSON.stringify(getNestedValue(prev, path)) !== JSON.stringify(getNestedValue(curr, path))) {
+                return true;
+            }
+        }
+        return false;
+    };
 
     const handleTemplateSearch = (val, fieldKey) => {
         lastSearchValues.current[fieldKey] = val;
@@ -37,20 +67,84 @@ export const MappingFields = ({
 
     const handleTemplateSelect = (value, fieldKey) => {
         const prevVal = lastSearchValues.current[fieldKey] || '';
-        const lastTagIndex = prevVal.lastIndexOf('}}');
-        const base = lastTagIndex !== -1 ? prevVal.substring(0, lastTagIndex + 2) : '';
-        const separator = (base && !base.endsWith(' ')) ? ' ' : '';
-        const newValue = base + separator + value;
+        const inputEl = inputRefs.current[fieldKey];
+        
+        if (!inputEl) {
+            // Fallback to programmatic updates if element is not ready
+            const lastTagCloseIndex = prevVal.lastIndexOf('}}');
+            let base = prevVal;
+            const lastTagOpenIndex = prevVal.lastIndexOf('{{');
+            if (lastTagOpenIndex !== -1 && lastTagOpenIndex > lastTagCloseIndex) {
+                base = prevVal.substring(0, lastTagOpenIndex);
+            }
+            const separator = (base && !base.endsWith(' ') && !base.endsWith('{')) ? ' ' : '';
+            const newValue = base + separator + value;
+            formInstance.setFieldValue(getName(fieldKey), newValue);
+            lastSearchValues.current[fieldKey] = newValue;
+            return;
+        }
 
-        formInstance.setFieldValue(getName(fieldKey), newValue);
-        lastSearchValues.current[fieldKey] = newValue;
+        // Focus the input natively so execCommand applies to it
+        inputEl.focus();
+
+        const start = inputEl.selectionStart;
+        const end = inputEl.selectionEnd;
+
+        if (start !== end) {
+            // Highlighting selection exists: replace it natively (preserves undo/redo stack)
+            document.execCommand('insertText', false, value);
+        } else {
+            // No selection (just cursor): replace active typing tag if exists
+            const lastTagCloseIndex = prevVal.lastIndexOf('}}');
+            const lastTagOpenIndex = prevVal.lastIndexOf('{{');
+            
+            if (lastTagOpenIndex !== -1 && lastTagOpenIndex > lastTagCloseIndex) {
+                // Select the text starting from '{{' to the end of input
+                inputEl.setSelectionRange(lastTagOpenIndex, prevVal.length);
+                document.execCommand('insertText', false, value);
+            } else {
+                // Otherwise, append to the end
+                const separator = (prevVal && !prevVal.endsWith(' ') && !prevVal.endsWith('{')) ? ' ' : '';
+                inputEl.setSelectionRange(prevVal.length, prevVal.length);
+                document.execCommand('insertText', false, separator + value);
+            }
+        }
+
+        // Sync local search cache with the new value
+        lastSearchValues.current[fieldKey] = formInstance.getFieldValue(getName(fieldKey));
     };
 
     const templateOptionsFilter = (inputValue, option) => {
         if (!inputValue) return true;
-        const lastPart = inputValue.split('}}').pop().trim();
-        if (!lastPart) return true;
-        return option.value.toUpperCase().indexOf(lastPart.toUpperCase()) !== -1;
+        
+        if (
+            filterCache.current.inputValue !== inputValue ||
+            filterCache.current.scopeColumns !== scopeColumns
+        ) {
+            const lastPart = inputValue.split('}}').pop().trim();
+            if (!lastPart) {
+                filterCache.current = {
+                    inputValue,
+                    scopeColumns,
+                    hasAnyMatch: false,
+                    searchVal: ''
+                };
+            } else {
+                const searchVal = lastPart.toUpperCase();
+                const cleanedCols = (scopeColumns || []).filter(col => col !== undefined && col !== null && col !== '');
+                const hasAnyMatch = cleanedCols.some(col => `{{${col}}}`.toUpperCase().includes(searchVal));
+                filterCache.current = {
+                    inputValue,
+                    scopeColumns,
+                    hasAnyMatch,
+                    searchVal
+                };
+            }
+        }
+
+        const { hasAnyMatch, searchVal } = filterCache.current;
+        if (!searchVal || !hasAnyMatch) return true;
+        return option.value.toUpperCase().indexOf(searchVal) !== -1;
     };
 
     return (
@@ -153,7 +247,7 @@ export const MappingFields = ({
             </div>
 
             {/* Dynamic Sections Wrapper */}
-            <Form.Item noStyle shouldUpdate>
+            <Form.Item noStyle shouldUpdate={shouldFormUpdate}>
                 {({ getFieldValue }) => {
                     const sourceState = getFieldValue(getName("source")) || 'Excel';
                     const dataTypeState = getFieldValue(getName("dataType")) || 'String';
@@ -271,7 +365,7 @@ export const MappingFields = ({
                                         style={{ marginBottom: 0 }}
                                     >
                                         <Select showSearch placeholder="Choose column..." style={{ width: '100%' }}>
-                                            {scopeColumns.map(col => <Option key={col} value={col}>{col}</Option>)}
+                                            {(scopeColumns || []).filter(col => col !== undefined && col !== null && col !== '').map(col => <Option key={col} value={col}>{col}</Option>)}
                                         </Select>
                                     </Form.Item>
                                 </div>
@@ -361,9 +455,11 @@ export const MappingFields = ({
                                                     style={{ marginBottom: 4 }}
                                                 >
                                                     <Input
+                                                        size="small"
                                                         prefix={apiType === 'Internal' ? <BuildOutlined style={{ color: '#3b82f6' }} /> : <GlobalOutlined style={{ color: '#3b82f6' }} />}
                                                         placeholder={apiType === 'Internal' ? "e.g. GetCustomerData" : "https://api..."}
                                                         variant="filled"
+                                                        style={{ borderRadius: 6, background: '#f8fafc' }}
                                                         suffix={
                                                             apiType === 'Internal' ? (
                                                                 <Popover content={<div style={{ maxWidth: 300, wordBreak: 'break-all' }}>{constructInternalUrl(url) || '...'}</div>} title="Full Internal URL" trigger="hover">
@@ -458,36 +554,48 @@ export const MappingFields = ({
                                                     <Row gutter={16}>
                                                         <Col span={12}>
                                                             <Form.Item name={getName("responsePath")} label={<Text strong style={{ fontSize: 11 }}>Items Path</Text>} rules={[{ required: true, message: 'Please enter Items Path' }]} style={{ marginBottom: 12 }} initialValue="result.result">
-                                                                <Input size="small" placeholder="result.result" variant="filled" style={{ borderRadius: 6, background: '#f3f4f6' }} />
+                                                                <Input size="small" placeholder="result.result" variant="filled" style={{ borderRadius: 6, background: '#f8fafc' }} />
                                                             </Form.Item>
                                                         </Col>
                                                         <Col span={12}>
                                                             <Form.Item name={getName("displayFormat")} label={<Text strong style={{ fontSize: 11 }}>Match Property</Text>} rules={[{ required: true, message: 'Please enter Match Property' }]} style={{ marginBottom: 12 }}>
-                                                                <Input size="small" placeholder="{{Name}}" variant="filled" style={{ borderRadius: 6, background: '#f3f4f6' }} />
+                                                                <Input size="small" placeholder="{{Name}}" variant="filled" style={{ borderRadius: 6, background: '#f8fafc' }} />
                                                             </Form.Item>
                                                         </Col>
                                                     </Row>
                                                     <Form.Item name={getName("searchKeyTemplate")} label={<Text strong style={{ fontSize: 11 }}>Excel Search Key</Text>} rules={[{ required: true, message: 'Please enter Excel Search Key' }]} style={{ marginBottom: 20 }}>
                                                         <AutoComplete
                                                             size="small"
-                                                            options={(scopeColumns || []).map(col => ({ value: `{{${col}}}` }))}
+                                                            className="mapping-autocomplete"
+                                                            style={{ width: '100%' }}
+                                                            options={memoizedOptions}
                                                             onSearch={(val) => handleTemplateSearch(val, "searchKeyTemplate")}
                                                             onSelect={(val) => handleTemplateSelect(val, "searchKeyTemplate")}
                                                             filterOption={templateOptionsFilter}
                                                         >
-                                                            <Input size="small" placeholder="e.g. {{ID}}" variant="filled" style={{ borderRadius: 6, background: '#f3f4f6' }} />
+                                                            <Input 
+                                                                ref={(el) => {
+                                                                    if (el) {
+                                                                        inputRefs.current["searchKeyTemplate"] = el.input || el;
+                                                                    }
+                                                                }}
+                                                                size="small" 
+                                                                placeholder="e.g. {{ID}}" 
+                                                                variant="borderless" 
+                                                                style={{ background: 'transparent', border: 'none', boxShadow: 'none', padding: 0 }} 
+                                                            />
                                                         </AutoComplete>
                                                     </Form.Item>
 
                                                     <Row gutter={16}>
                                                         <Col span={12}>
                                                             <Form.Item name={getName("valuePath")} label={<Text strong style={{ fontSize: 11 }}>Value</Text>} rules={[{ required: true, message: 'Please enter Value Path' }]} style={{ marginBottom: 0 }}>
-                                                                <Input size="small" placeholder="{{id}}" variant="filled" style={{ borderRadius: 6, background: '#f3f4f6' }} />
+                                                                <Input size="small" placeholder="{{id}}" variant="filled" style={{ borderRadius: 6, background: '#f8fafc' }} />
                                                             </Form.Item>
                                                         </Col>
                                                         <Col span={12}>
                                                             <Form.Item name={getName("textPath")} label={<Text strong style={{ fontSize: 11 }}>Text</Text>} rules={[{ required: true, message: 'Please enter Text Path' }]} style={{ marginBottom: 0 }}>
-                                                                <Input size="small" placeholder="{{name}}" variant="filled" style={{ borderRadius: 6, background: '#f3f4f6' }} />
+                                                                <Input size="small" placeholder="{{name}}" variant="filled" style={{ borderRadius: 6, background: '#f8fafc' }} />
                                                             </Form.Item>
                                                         </Col>
                                                     </Row>
