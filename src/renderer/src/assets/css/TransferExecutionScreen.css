@@ -354,11 +354,35 @@
     padding-left: 14px !important;
 }
 
-.exec-container .ant-table-selection-column .ant-table-selection {
+/* Restrict to body rows for compact row alignment */
+.exec-container .ant-table-tbody-virtual .ant-table-selection-column,
+.exec-container .ant-table-tbody .ant-table-selection-column {
+    padding: 0 !important;
+    text-align: center !important;
+}
+
+.exec-container .ant-table-tbody-virtual .ant-table-selection-column .ant-table-selection,
+.exec-container .ant-table-tbody .ant-table-selection-column .ant-table-selection {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
     height: 34px !important;
+}
+
+/* Header selection cell: use natural table cell alignment and center vertically */
+.exec-container th.ant-table-selection-column {
+    display: table-cell !important;
+    padding: 0 !important;
+    text-align: center !important;
+    vertical-align: middle !important;
+}
+
+.exec-container th.ant-table-selection-column .ant-table-selection {
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    height: 100% !important;
+    margin: 0 auto !important;
 }
 
 .exec-container .ant-table-selection {

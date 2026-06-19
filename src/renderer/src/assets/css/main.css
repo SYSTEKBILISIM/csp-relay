@@ -458,7 +458,7 @@ td.ant-table-cell:has(.ant-empty-description) {
     border: none !important;
 }
 
-.ant-table-cell.ant-table-selection-column {
+.ant-table-cell.ant-table-selection-column:not(th) {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;

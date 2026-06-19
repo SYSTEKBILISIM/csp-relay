@@ -1,5 +1,5 @@
 import _ from 'lodash';
-import { resolveTokens, normalizeString, resolvePrimitiveValue, calculateSimilarity } from '../utils/transferUtils';
+import { resolveTokens, normalizeString, resolvePrimitiveValue, calculateSimilarity, getRowValue } from '../utils/transferUtils';
 import { constructPayload } from './PayloadFactory';
 
 const RELAY_CSP_APP_NAME = 'Systek_SynergyCSPRelay';
@@ -177,7 +177,7 @@ async function resolveMappedValueArray(mapping, rowData, globalStore, apiCache, 
         const col = mapping.valueCol;
         if (!col) return { Value: [], Text: '' };
 
-        const rawCell = rowData[col];
+        const rawCell = getRowValue(rowData, col);
         const items = tryParseArrayCell(rawCell);
 
         if (!items) {
@@ -197,7 +197,7 @@ async function resolveMappedValueArray(mapping, rowData, globalStore, apiCache, 
         if (mapping.searchKeyTemplate) {
             rawCell = String(resolveTokens(mapping.searchKeyTemplate, rowData, objectContext));
         } else if (mapping.textCol) {
-            rawCell = String(rowData[mapping.textCol] || '');
+            rawCell = String(getRowValue(rowData, mapping.textCol) || '');
         }
 
         const items = tryParseArrayCell(rawCell);
@@ -454,7 +454,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
     if (mapping.source === 'Excel') {
         const col = mapping.valueCol;
         if (col) {
-            const rawVal = rowData[col];
+            const rawVal = getRowValue(rowData, col);
             finalValue = resolvePrimitiveValue(rawVal, mapping.dataType, mapping);
             finalText = String(finalValue !== null ? finalValue : '');
         }
@@ -463,7 +463,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
         if (mapping.searchKeyTemplate) {
             searchKey = String(resolveTokens(mapping.searchKeyTemplate, rowData, objectContext));
         } else if (mapping.textCol) {
-            searchKey = String(rowData[mapping.textCol] || '');
+            searchKey = String(getRowValue(rowData, mapping.textCol) || '');
         }
 
         const trimmedKey = searchKey.trim();
@@ -754,7 +754,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
         // Extract LoginAs if enabled
         if (definitionData.loginAsEnabled && definitionData.loginAsColumn) {
-            const rawVal = rowData[definitionData.loginAsColumn];
+            const rawVal = getRowValue(rowData, definitionData.loginAsColumn);
             if (rawVal !== undefined && rawVal !== null && String(rawVal).trim() !== '') {
                 loginAsValue = String(rawVal).trim();
             }
@@ -994,7 +994,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     if (type === 'InlineGrid' || type === 'RelatedGrid') {
                         const masterCol = mapping.masterKey;
                         if (masterCol) {
-                            const masterValue = rowData[masterCol];
+                            const masterValue = getRowValue(rowData, masterCol);
                             const resolvedRows = await resolveGridRows(type, mapping, masterValue);
                             resolved[p.key] = resolvedRows;
                         } else {
@@ -1048,14 +1048,14 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 if (type === 'InlineGrid') {
                     const masterCol = mapping.masterKey;
                     if (masterCol) {
-                        const masterValue = rowData[masterCol];
+                        const masterValue = getRowValue(rowData, masterCol);
                         const resolvedRows = await resolveGridRows(type, mapping, masterValue);
                         rowObj = { FieldName: def.name, Type: 'InlineGrid', Rows: resolvedRows };
                     }
                 } else if (type === 'RelatedGrid') {
                     const masterCol = mapping.masterKey;
                     if (masterCol) {
-                        const masterValue = rowData[masterCol];
+                        const masterValue = getRowValue(rowData, masterCol);
                         const resolvedRows = await resolveGridRows(type, mapping, masterValue);
                         const submittedRowRefs = [];
                         const chunkSize = relatedGridChunkSize;
@@ -1105,7 +1105,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 } else if (type === 'RelatedDocument') {
                     const pathCol = mapping.pathCol;
                     if (pathCol) {
-                        const filePathRaw = String(rowData[pathCol] || '').trim();
+                        const filePathRaw = String(getRowValue(rowData, pathCol) || '').trim();
                         if (filePathRaw && window.api?.readFileAsBase64) {
                             let filePaths = [];
                             try {
