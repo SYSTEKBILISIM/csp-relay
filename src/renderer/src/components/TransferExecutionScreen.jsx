@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx';
 import Editor from '@monaco-editor/react';
 import { useTransferExecution } from '../hooks/useTransferExecution';
 import { LogDetailsModal, safeJsonFormat, CopyAnimatedButton } from './log/LogDetailsModal';
+import { getRowValue } from '../utils/transferUtils';
 import '../assets/css/TransferExecutionScreen.css';
 
 // Robust Turkish-aware lowercasing with normalization
@@ -173,8 +174,8 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         if (!tableContainerRef.current) return;
         const updateHeight = () => {
             if (tableContainerRef.current) {
-                // Precision adjustment: reduce the subtracted header height to let the table fill the container better
-                const height = tableContainerRef.current.clientHeight - 34;
+                // Precision adjustment: subtract slightly more header/border height to prevent table bottom clipping
+                const height = tableContainerRef.current.clientHeight - 46;
                 setTableScrollY(height > 50 ? height : 400);
             }
         };
@@ -237,7 +238,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 exportData.push({
                     "#": l.id,
                     Status: l.status,
-                    [mainIdKey]: rowData[mainIdKey] || '-',
+                    [mainIdKey]: getRowValue(rowData, mainIdKey) || '-',
                     Message: l.message,
                     Timestamp: l.timestamp,
                     Duration: l.duration,
@@ -433,7 +434,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             width: 130,
             render: (_, record) => {
                 const rowData = getRowData(record.key) || {};
-                const idVal = rowData[definitionData.mainIdColumn];
+                const idVal = getRowValue(rowData, definitionData.mainIdColumn);
                 const isFocused = matches.length > 0 && record.key === matches[currentMatchIndex];
                 return (
                     <StableCell style={{ fontWeight: 600, color: '#1e293b' }}>
@@ -552,7 +553,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             width: 130,
             render: (_, record) => {
                 const rowData = getRowData(record.key) || {};
-                const idVal = rowData[definitionData.mainIdColumn];
+                const idVal = getRowValue(rowData, definitionData.mainIdColumn);
                 const isFocused = matches.length > 0 && record.key === matches[currentMatchIndex];
                 return (
                     <StableCell style={{ fontWeight: 600, color: '#1e293b' }}>
@@ -600,7 +601,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         return currentData
             .filter(item => {
                 const rowData = getRowData(item.key) || {};
-                const idVal = turkishLower(rowData[definitionData.mainIdColumn] || '');
+                const idVal = turkishLower(getRowValue(rowData, definitionData.mainIdColumn) || '');
 
                 // 1. Check basic functional fields ONLY (Exclude technical fields)
                 if (

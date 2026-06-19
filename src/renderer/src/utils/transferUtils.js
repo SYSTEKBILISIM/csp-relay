@@ -72,6 +72,56 @@ export const calculateSimilarity = (str1, str2) => {
 };
 
 /**
+ * Finds the corresponding key in rowData, supporting Turkish-aware case-insensitive
+ * and fuzzy normalized matching.
+ * @param {object} rowData 
+ * @param {string} targetKey 
+ * @returns {string|null}
+ */
+export const findRowDataKey = (rowData, targetKey) => {
+    if (!rowData || !targetKey) return null;
+    
+    // 1. Try exact match
+    if (rowData[targetKey] !== undefined) return targetKey;
+
+    const trimmedTarget = String(targetKey).trim();
+    if (rowData[trimmedTarget] !== undefined) return trimmedTarget;
+
+    // 2. Try case-insensitive matching (Turkish-aware)
+    const lowerTarget = trimmedTarget.toLocaleLowerCase('tr-TR');
+    const keys = Object.keys(rowData);
+    for (const key of keys) {
+        if (String(key).trim().toLocaleLowerCase('tr-TR') === lowerTarget) {
+            return key;
+        }
+    }
+
+    // 3. Try normalized matching (ignoring punctuation, spaces, and folding Turkish characters)
+    const normalizedTarget = normalizeString(trimmedTarget);
+    if (normalizedTarget) {
+        for (const key of keys) {
+            if (normalizeString(key) === normalizedTarget) {
+                return key;
+            }
+        }
+    }
+
+    return null;
+};
+
+/**
+ * Safely gets a value from rowData, supporting Turkish-aware fuzzy matching for column keys.
+ * @param {object} rowData 
+ * @param {string} targetKey 
+ * @returns {any}
+ */
+export const getRowValue = (rowData, targetKey) => {
+    if (!rowData || !targetKey) return undefined;
+    const resolvedKey = findRowDataKey(rowData, targetKey);
+    return resolvedKey ? rowData[resolvedKey] : undefined;
+};
+
+/**
  * Replaces {{token}} placeholders in a template string with values from rowData or context.
  * @param {string} template 
  * @param {object} rowData - Excel row data
@@ -83,9 +133,12 @@ export const resolveTokens = (template, rowData, processedObjects) => {
     return template.replace(/{{\s*([^{}]+?)\s*}}/g, (match, rawToken) => {
         const token = rawToken.trim();
 
-        // Priority 0: Exact match in Row Data (handles keys with dots like "VD." or "T.C.")
-        if (rowData && rowData[token] !== undefined) {
-            return rowData[token];
+        // Priority 0: Fuzzy / Exact match in Row Data (handles keys with dots like "VD." or "T.C." and Turkish characters)
+        if (rowData) {
+            const val = getRowValue(rowData, token);
+            if (val !== undefined) {
+                return val;
+            }
         }
 
         const parts = token.split('.');
@@ -107,8 +160,11 @@ export const resolveTokens = (template, rowData, processedObjects) => {
         }
 
         // Priority 2: Row Data (Excel columns)
-        if (rowData && rowData[baseKey] !== undefined) {
-            return rowData[baseKey];
+        if (rowData) {
+            const val = getRowValue(rowData, baseKey);
+            if (val !== undefined) {
+                return val;
+            }
         }
 
         return ''; // Unresolved token
