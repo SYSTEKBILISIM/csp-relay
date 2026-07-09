@@ -6,6 +6,7 @@ import Editor from '@monaco-editor/react';
 import { useTransferExecution } from '../hooks/useTransferExecution';
 import { LogDetailsModal, safeJsonFormat, CopyAnimatedButton } from './log/LogDetailsModal';
 import { getRowValue } from '../utils/transferUtils';
+import { ResizableTitle } from './ResizableTitle';
 import '../assets/css/TransferExecutionScreen.css';
 
 // Robust Turkish-aware lowercasing with normalization
@@ -62,6 +63,8 @@ const HighlightText = ({ text, highlight, isFocused }) => {
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 
+const QUEUE_SELECTION_COLUMN_WIDTH = 28;
+const QUEUE_DRAG_COLUMN_WIDTH = 22;
 
 
 export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChange }) => {
@@ -101,12 +104,39 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const [previewData, setPreviewData] = useState(null);
     const tableContainerRef = useRef(null);
     const [tableScrollY, setTableScrollY] = useState(400);
+    const [tableViewportWidth, setTableViewportWidth] = useState(0);
     const [searchText, setSearchText] = useState('');
     const [debouncedSearchText, setDebouncedSearchText] = useState('');
     const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
     const searchInputRef = useRef(null);
     const queueTableRef = useRef(null);
     const resultsTableRef = useRef(null);
+    const [resultColWidths, setResultColWidths] = useState({
+        id: 50,
+        status: 150,
+        mainId: 140,
+        message: 270,
+        timestamp: 135,
+        duration: 100,
+        details: 70
+    });
+    const [queueColWidths, setQueueColWidths] = useState({
+        dragHandle: QUEUE_DRAG_COLUMN_WIDTH,
+        id: 50,
+        status: 140,
+        mainId: 130,
+        rowData: 150
+    });
+
+    const handleResultResize = key => (e, { size }) => {
+        setResultColWidths(prev => ({ ...prev, [key]: Math.max(size.width, key === 'details' ? 60 : 50) }));
+    };
+
+    const handleQueueResize = key => (e, { size }) => {
+        setQueueColWidths(prev => ({ ...prev, [key]: Math.max(size.width, 50) }));
+    };
+
+    const nonResizableColumnKeys = new Set(['dragHandle']);
 
     // Debounce Search Text to prevent UI freeze on large datasets
     useEffect(() => {
@@ -175,8 +205,9 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         const updateHeight = () => {
             if (tableContainerRef.current) {
                 // Precision adjustment: subtract slightly more header/border height to prevent table bottom clipping
-                const height = tableContainerRef.current.clientHeight - 46;
+                const height = tableContainerRef.current.clientHeight - 35;
                 setTableScrollY(height > 50 ? height : 400);
+                setTableViewportWidth(tableContainerRef.current.clientWidth - 5);
             }
         };
         const observer = new ResizeObserver(updateHeight);
@@ -395,76 +426,114 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         </div>
     );
 
+    const TruncatedText = ({ text, highlight, isFocused }) => {
+        const value = text ?? '-';
+        return (
+            <Tooltip placement="topLeft" title={String(value)}>
+                <span className="cell-ellipsis">
+                    <HighlightText text={value} highlight={highlight} isFocused={isFocused} />
+                </span>
+            </Tooltip>
+        );
+    };
+
+    const makeResizableColumns = (tableColumns, widths, onResize) => tableColumns.map(col => {
+        const key = col.key || col.dataIndex;
+        const width = widths[key] ?? col.width;
+        const nextColumn = {
+            ...col,
+            width
+        };
+        if (nonResizableColumnKeys.has(key)) {
+            return nextColumn;
+        }
+        return {
+            ...nextColumn,
+            onHeaderCell: column => ({
+                width: column.width,
+                onResize: onResize(key)
+            })
+        };
+    });
+
+    const getScrollConfig = (widths, rowCount, extraWidth = 0) => {
+        if (rowCount === 0) return undefined;
+        return {
+            x: Math.max(Object.values(widths).reduce((sum, width) => sum + width, 0) + extraWidth, tableViewportWidth),
+            y: tableScrollY
+        };
+    };
+
 
 
     const columns = [
         {
             title: <span className="table-header-sm">#</span>,
+            key: 'id',
             dataIndex: 'id',
-            width: 50,
             sorter: (a, b) => a.id - b.id,
             render: (text, record) => (
                 <StableCell style={{ color: '#64748b' }}>
-                    <HighlightText text={text} highlight={debouncedSearchText} isFocused={matches.length > 0 && record.key === matches[currentMatchIndex]} />
+                    <TruncatedText text={text} highlight={debouncedSearchText} isFocused={matches.length > 0 && record.key === matches[currentMatchIndex]} />
                 </StableCell>
             )
         },
         {
             title: <span className="table-header-sm">Status</span>,
+            key: 'status',
             dataIndex: 'status',
-            width: 150,
             filters: [{ text: 'Success', value: 'Success' }, { text: 'Warning', value: 'Warning' }, { text: 'Error', value: 'Error' }, { text: 'Validation Error', value: 'ValidationError' }, { text: 'Processing', value: 'Processing' }],
             onFilter: (value, record) => record.status === value,
             render: (status, record) => {
                 const isFocused = matches.length > 0 && record.key === matches[currentMatchIndex];
+                const displayStatus = status === 'ValidationError' ? 'Validation Error' : status;
                 return (
                     <StableCell style={{ color: status === 'Success' ? '#16a34a' : status === 'Warning' ? '#f59e0b' : status === 'Processing' ? '#3b82f6' : status === 'ValidationError' ? '#e11d48' : '#dc2626', fontWeight: 600, gap: 6 }}>
                         <div style={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'start', flexShrink: 0 }}>
                             {status === 'Success' ? <CheckCircleOutlined /> : status === 'Warning' ? <InfoCircleOutlined /> : status === 'Processing' ? <SyncOutlined spin /> : <CloseCircleOutlined />}
                         </div>
-                        <span>
-                            <HighlightText text={status === 'ValidationError' ? 'Validation Error' : status} highlight={debouncedSearchText} isFocused={isFocused} />
-                        </span>
+                        <TruncatedText text={displayStatus} highlight={debouncedSearchText} isFocused={isFocused} />
                     </StableCell>
                 );
             }
         },
         {
             title: <span className="table-header-sm">{definitionData.mainIdColumn || 'ID'}</span>,
-            width: 130,
+            key: 'mainId',
             render: (_, record) => {
                 const rowData = getRowData(record.key) || {};
                 const idVal = getRowValue(rowData, definitionData.mainIdColumn);
                 const isFocused = matches.length > 0 && record.key === matches[currentMatchIndex];
                 return (
                     <StableCell style={{ fontWeight: 600, color: '#1e293b' }}>
-                        <HighlightText text={idVal || '-'} highlight={debouncedSearchText} isFocused={isFocused} />
+                        <TruncatedText text={idVal || '-'} highlight={debouncedSearchText} isFocused={isFocused} />
                     </StableCell>
                 );
             }
         },
         {
             title: <span className="table-header-sm">Message</span>,
+            key: 'message',
             dataIndex: 'message',
             sorter: (a, b) => a.message.localeCompare(b.message),
             ...getColumnSearchProps('message'),
             ellipsis: { showTitle: false },
-            render: (v, record) => <StableCell><Tooltip placement="topLeft" title={v}><span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}><HighlightText text={v} highlight={debouncedSearchText} isFocused={matches.length > 0 && record.key === matches[currentMatchIndex]} /></span></Tooltip></StableCell>
+            render: (v, record) => <StableCell><TruncatedText text={v} highlight={debouncedSearchText} isFocused={matches.length > 0 && record.key === matches[currentMatchIndex]} /></StableCell>
         },
         {
             title: <span className="table-header-sm">Timestamp</span>,
+            key: 'timestamp',
             dataIndex: 'timestamp',
-            width: 135,
             sorter: (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-            render: (text) => <StableCell style={{ fontSize: '11px', color: '#94a3b8' }}>{text}</StableCell>
+            render: (text) => <StableCell style={{ fontSize: '11px', color: '#94a3b8' }}><TruncatedText text={text} /></StableCell>
         },
         {
             title: <span className="table-header-sm">Duration</span>,
+            key: 'duration',
             dataIndex: 'duration',
-            width: 100,
             align: 'right',
             sorter: (a, b) => parseInt(a.duration) - parseInt(b.duration),
-            render: (text) => <StableCell style={{ justifyContent: 'flex-end', width: '100%' }}>{text}</StableCell>
+            render: (text) => <StableCell style={{ justifyContent: 'flex-end', width: '100%' }}><TruncatedText text={text} /></StableCell>
         },
         {
             title: <span className="table-header-sm">Details</span>,
@@ -505,8 +574,10 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         {
             title: '',
             dataIndex: 'dragHandle',
-            width: 30,
+            key: 'dragHandle',
+            className: 'queue-drag-column',
             align: 'center',
+            onHeaderCell: () => ({ className: 'queue-drag-column' }),
             render: (_, record) => {
                 const isLocked = loading || record.status !== 'Pending';
                 return (
@@ -521,43 +592,42 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         {
             title: <span className="table-header-sm">#</span>,
             dataIndex: 'id',
-            width: 50,
+            key: 'id',
             render: (text, record) => (
                 <StableCell style={{ color: '#64748b', fontWeight: 600 }}>
-                    <HighlightText text={text} highlight={debouncedSearchText} isFocused={matches.length > 0 && record.key === matches[currentMatchIndex]} />
+                    <TruncatedText text={text} highlight={debouncedSearchText} isFocused={matches.length > 0 && record.key === matches[currentMatchIndex]} />
                 </StableCell>
             )
         },
         {
             title: <span className="table-header-sm">Status</span>,
             dataIndex: 'status',
-            width: 140,
+            key: 'status',
             filters: [{ text: 'Success', value: 'Success' }, { text: 'Warning', value: 'Warning' }, { text: 'Error', value: 'Error' }, { text: 'Validation Error', value: 'ValidationError' }, { text: 'Pending', value: 'Pending' }, { text: 'Processing', value: 'Processing' }],
             onFilter: (value, record) => record.status === value,
             render: (status, record) => {
                 const isFocused = matches.length > 0 && record.key === matches[currentMatchIndex];
+                const displayStatus = status === 'ValidationError' ? 'Validation Error' : status;
                 return (
                     <StableCell style={{ color: status === 'Success' ? '#16a34a' : status === 'Warning' ? '#f59e0b' : status === 'Pending' ? '#94a3b8' : status === 'Processing' ? '#3b82f6' : status === 'ValidationError' ? '#e11d48' : '#dc2626', fontWeight: 600, gap: 6 }}>
                         <div style={{ width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                             {status === 'Success' ? <CheckCircleOutlined /> : status === 'Warning' ? <InfoCircleOutlined /> : status === 'Processing' ? <SyncOutlined spin /> : status === 'Pending' ? <FileTextOutlined /> : <CloseCircleOutlined />}
                         </div>
-                        <span>
-                            <HighlightText text={status === 'ValidationError' ? 'Validation Error' : status} highlight={searchText} isFocused={isFocused} />
-                        </span>
+                        <TruncatedText text={displayStatus} highlight={debouncedSearchText} isFocused={isFocused} />
                     </StableCell>
                 );
             }
         },
         {
             title: <span className="table-header-sm">{definitionData.mainIdColumn || 'ID'}</span>,
-            width: 130,
+            key: 'mainId',
             render: (_, record) => {
                 const rowData = getRowData(record.key) || {};
                 const idVal = getRowValue(rowData, definitionData.mainIdColumn);
                 const isFocused = matches.length > 0 && record.key === matches[currentMatchIndex];
                 return (
                     <StableCell style={{ fontWeight: 600, color: '#1e293b' }}>
-                        <HighlightText text={idVal || '-'} highlight={debouncedSearchText} isFocused={isFocused} />
+                        <TruncatedText text={idVal || '-'} highlight={debouncedSearchText} isFocused={isFocused} />
                     </StableCell>
                 );
             }
@@ -565,6 +635,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         {
             title: <span className="table-header-sm">Preview Data</span>,
             dataIndex: 'rowData',
+            key: 'rowData',
             render: (_, record) => {
                 const rowData = getRowData(record.key) || {};
                 const isDetailMatch = debouncedSearchText && Object.entries(rowData).some(([k, v]) =>
@@ -701,7 +772,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     }, [computedResultLogs]);
 
     const rowSelection = {
-        columnWidth: 38,
+        columnWidth: QUEUE_SELECTION_COLUMN_WIDTH,
         selectedRowKeys,
         onChange: (newSelectedRowKeys) => {
             if (loading || isPaused) {
@@ -960,14 +1031,15 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     {activeTab === 'queue' && (
                         <div id="queue-table-container" className="scrollable-table-box">
                             <Table
+                                components={{ header: { cell: ResizableTitle } }}
                                 ref={queueTableRef}
                                 onRow={onQueueRow}
                                 rowSelection={rowSelection}
                                 dataSource={logs}
-                                columns={queueColumns}
+                                columns={makeResizableColumns(queueColumns, queueColWidths, handleQueueResize)}
                                 pagination={false}
                                 virtual={logs.length > 0}
-                                scroll={logs.length > 0 ? { y: tableScrollY } : undefined}
+                                scroll={getScrollConfig(queueColWidths, logs.length, QUEUE_SELECTION_COLUMN_WIDTH)}
                                 size="small"
                                 rowKey="key"
                                 tableLayout="fixed"
@@ -985,13 +1057,14 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                             onKeyDown={handleUserInteraction}
                         >
                             <Table
+                                components={{ header: { cell: ResizableTitle } }}
                                 ref={resultsTableRef}
                                 dataSource={computedResultLogs}
-                                columns={columns}
+                                columns={makeResizableColumns(columns, resultColWidths, handleResultResize)}
                                 pagination={false}
                                 virtual={computedResultLogs.length > 0}
                                 size="small"
-                                scroll={computedResultLogs.length > 0 ? { y: tableScrollY } : undefined}
+                                scroll={getScrollConfig(resultColWidths, computedResultLogs.length)}
                                 rowKey="key"
                                 tableLayout="fixed"
                                 style={{ fontSize: '13px', width: '100%' }}

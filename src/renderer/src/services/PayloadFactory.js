@@ -32,13 +32,14 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
         } else if (obj.Type === 'RelatedDocument') {
             const items = [];
             if (Array.isArray(obj.Items)) {
+                // Each item is now { FileSecretKey, Category, Path } from the upload flow
                 items.push(...obj.Items);
-            } else {
+            } else if (obj.FileSecretKey) {
                 items.push({
-                    Name: obj.Name,
-                    ContentType: obj.ContentType,
-                    Extension: obj.Extension,
-                    Data: obj.Data
+                    FileSecretKey: obj.FileSecretKey,
+                    Category: obj.Category,
+                    Path: obj.Path,
+                    FileSize: obj.FileSize
                 });
             }
             relatedDocs.push({

@@ -3,6 +3,8 @@ import { resolveTokens, normalizeString, resolvePrimitiveValue, calculateSimilar
 import { constructPayload } from './PayloadFactory';
 
 const RELAY_CSP_APP_NAME = 'Systek_SynergyCSPRelay';
+const DEFAULT_API_PAGE_SIZE = 200;
+const RELAY_UPLOAD_CHUNK_BYTES = 2.5 * 1024 * 1024;
 
 async function fetchWithRetry(url, options, maxRetries = 3) {
     for (let i = 0; i <= maxRetries; i++) {
@@ -24,6 +26,274 @@ async function fetchWithRetry(url, options, maxRetries = 3) {
         }
     }
 }
+
+function parseJsonBody(body) {
+    if (!body) return {};
+    if (typeof body === 'object') return _.cloneDeep(body);
+    return JSON.parse(body);
+}
+
+function getApiPageSize(parsedBody) {
+    const configuredTake = Number(parsedBody?.loadOptions?.pagination?.take);
+    return Number.isFinite(configuredTake) && configuredTake > 0 ? configuredTake : DEFAULT_API_PAGE_SIZE;
+}
+
+function withPagination(body, skip, take) {
+    const parsedBody = parseJsonBody(body);
+    if (!parsedBody.loadOptions) parsedBody.loadOptions = {};
+    parsedBody.loadOptions.pagination = { skip, take };
+    return JSON.stringify(parsedBody);
+}
+
+async function fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, responsePath, apiLog = null) {
+    const method = fetchOptions.method || 'GET';
+    const canPage = method !== 'GET' && method !== 'HEAD' && resolvedBody;
+
+    if (!canPage) {
+        const res = await fetchWithRetry(resolvedUrl, fetchOptions);
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`API lookup failed (HTTP ${res.status}): ${errText}`);
+        }
+        const json = await res.json();
+        if (apiLog) apiLog.raw.response = json;
+        return _.get(json, responsePath || 'result.result') || [];
+    }
+
+    let parsedBody;
+    try {
+        parsedBody = parseJsonBody(resolvedBody);
+    } catch (e) {
+        const res = await fetchWithRetry(resolvedUrl, fetchOptions);
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`API lookup failed (HTTP ${res.status}): ${errText}`);
+        }
+        const json = await res.json();
+        if (apiLog) apiLog.raw.response = json;
+        return _.get(json, responsePath || 'result.result') || [];
+    }
+
+    if (!parsedBody.loadOptions) {
+        const res = await fetchWithRetry(resolvedUrl, fetchOptions);
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`API lookup failed (HTTP ${res.status}): ${errText}`);
+        }
+        const json = await res.json();
+        if (apiLog) apiLog.raw.response = json;
+        return _.get(json, responsePath || 'result.result') || [];
+    }
+
+    const take = getApiPageSize(parsedBody);
+    const allItems = [];
+    const pageResponses = [];
+
+    for (let skip = 0; ; skip += take) {
+        const pageBody = withPagination(parsedBody, skip, take);
+        const pageOptions = { ...fetchOptions, body: pageBody };
+        const res = await fetchWithRetry(resolvedUrl, pageOptions);
+        if (!res.ok) {
+            const errText = await res.text();
+            throw new Error(`API lookup page failed (skip: ${skip}, take: ${take}, HTTP ${res.status}): ${errText}`);
+        }
+
+        const json = await res.json();
+        const pageItems = _.get(json, responsePath || 'result.result') || [];
+        if (apiLog) {
+            pageResponses.push({
+                pagination: { skip, take },
+                count: Array.isArray(pageItems) ? pageItems.length : 0,
+                request: {
+                    url: resolvedUrl,
+                    method,
+                    headers: pageOptions.headers,
+                    body: parseJsonBody(pageBody)
+                },
+                response: json
+            });
+        }
+
+        if (!Array.isArray(pageItems) || pageItems.length === 0) break;
+
+        allItems.push(...pageItems);
+        if (pageItems.length < take) break;
+    }
+
+    if (apiLog) {
+        apiLog.raw.response = {
+            pagination: {
+                pageSize: take,
+                pages: pageResponses.length,
+                totalItems: allItems.length
+            },
+            pages: pageResponses
+        };
+        apiLog.raw.pages = pageResponses;
+    }
+
+    return allItems;
+}
+/**
+ * Uploads a file using the 2-step CreateFileParts → UploadFileParts flow.
+ * Returns { FileSecretKey, Category, Path } on success, or throws on failure.
+ *
+ * @param {string} baseUrl  - base Transfer API URL (without trailing slash)
+ * @param {object} headers  - common auth headers (Authorization, bimser-encrypted-data, bimser-language)
+ * @param {object} fileInfo - { name, contentType, size, buffer } from readFileAsBuffer
+ * @param {string} category - The mapping category / path config value (e.g. "DOCUMENTS")
+ * @param {object} executionLog - shared execution log array for diagnostics
+ */
+async function uploadFileInParts(baseUrl, headers, fileInfo, category, executionLog) {
+    const { name, contentType, size, buffer } = fileInfo;
+
+    // ── Step 1: CreateFileParts ──────────────────────────────────────────────
+    const createLog = {
+        key: `create_file_parts_${Date.now()}_${Math.random()}`,
+        step: 'CreateFileParts',
+        details: `File: ${name} (${size} bytes)`,
+        status: 'Pending'
+    };
+    executionLog.push(createLog);
+
+    const createBody = {
+        Name: name,
+        Description: name,
+        Path: category,
+        DataLength: size,
+        ContentType: contentType
+    };
+
+    const createRes = await fetchWithRetry(`${baseUrl}/CreateFileParts`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(createBody)
+    });
+
+    if (!createRes.ok) {
+        const errText = await createRes.text();
+        createLog.status = 'Error';
+        createLog.raw = { request: { url: `${baseUrl}/CreateFileParts`, body: createBody }, response: errText };
+        throw new Error(`CreateFileParts failed (HTTP ${createRes.status}): ${errText}`);
+    }
+
+    const createJson = await createRes.json();
+    createLog.status = 'Success';
+    createLog.raw = { request: { url: `${baseUrl}/CreateFileParts`, body: createBody }, response: createJson };
+
+    const fileSecretKey = createJson.fileSecretKey;
+    const uploadParts = createJson.uploadParts; // Array<{id, startByte, endByte, url}>
+
+    if (!fileSecretKey || !Array.isArray(uploadParts) || uploadParts.length === 0) {
+        throw new Error(`CreateFileParts response missing fileSecretKey or uploadParts for "${name}"`);
+    }
+
+    // Convert plain array (from IPC) to Uint8Array for slicing
+    const byteArray = new Uint8Array(buffer);
+
+    const normalizedUploadParts = uploadParts.map(part => ({
+        id: part.id,
+        startByte: part.startByte,
+        endByte: part.endByte,
+        url: part.url
+    }));
+    const totalRelayChunks = Math.ceil(size / RELAY_UPLOAD_CHUNK_BYTES);
+
+    // ── Step 2: UploadFileParts (small relay chunks, SDK upload on final chunk) ──
+    for (let chunkStart = 0, chunkIndex = 1; chunkStart < size; chunkStart += RELAY_UPLOAD_CHUNK_BYTES, chunkIndex++) {
+        const chunkEndExclusive = Math.min(chunkStart + RELAY_UPLOAD_CHUNK_BYTES, size);
+        const partLog = {
+            key: `upload_chunk_${chunkIndex}_${Date.now()}_${Math.random()}`,
+            step: 'UploadFileParts',
+            details: `File: ${name}, Chunk #${chunkIndex}/${totalRelayChunks} (bytes ${chunkStart}-${chunkEndExclusive - 1})`,
+            status: 'Pending'
+        };
+        executionLog.push(partLog);
+
+        // Slice the file into relay-safe chunks and convert to base64.
+        const slice = byteArray.slice(chunkStart, chunkEndExclusive);
+        let binary = '';
+        for (let i = 0; i < slice.length; i++) binary += String.fromCharCode(slice[i]);
+        const chunkBase64 = btoa(binary);
+
+        const uploadBody = {
+            FileSecretKey: fileSecretKey,
+            UploadParts: normalizedUploadParts,
+            ContentType: contentType,
+            Data: chunkBase64,
+            DataLength: slice.length,
+            ChunkStartByte: chunkStart,
+            TotalFileBytes: size
+        };
+
+        const uploadUrl = `${baseUrl}/UploadFileParts`;
+        const uploadReq = {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(uploadBody)
+        };
+
+        const uploadRes = await fetchWithRetry(uploadUrl, uploadReq);
+
+        // Keep the network payload intact; only the diagnostic copy is shortened for the UI.
+        const loggedBody = {
+            ...uploadBody,
+            Data: chunkBase64.substring(0, 50) + '... [TRUNCATED FOR LOGS - FULL DATA SENT]'
+        };
+        
+        const reqLogInfo = {
+            url: uploadUrl,
+            method: 'POST',
+            headers,
+            body: loggedBody,
+            logInfo: {
+                dataTruncated: true,
+                fullDataSent: true,
+                dataLength: chunkBase64.length,
+                rawByteLength: slice.length,
+                chunkStartByte: chunkStart,
+                chunkEndByte: chunkEndExclusive - 1,
+                totalFileBytes: size,
+                relayChunkIndex: chunkIndex,
+                totalRelayChunks,
+                totalUploadParts: uploadParts.length,
+                cspUploadParts: normalizedUploadParts.map(part => ({
+                    id: part.id,
+                    startByte: part.startByte,
+                    endByte: part.endByte,
+                    byteLength: part.endByte - part.startByte + 1
+                }))
+            }
+        };
+
+        if (!uploadRes.ok) {
+            const errText = await uploadRes.text();
+            partLog.status = 'Error';
+            partLog.raw = { request: reqLogInfo, response: errText };
+            throw new Error(`UploadFileParts failed for "${name}" chunk #${chunkIndex}/${totalRelayChunks} (HTTP ${uploadRes.status}): ${errText}`);
+        }
+
+        // Response is true/false
+        const uploadResult = await uploadRes.json();
+        if (uploadResult !== true) {
+            partLog.status = 'Error';
+            partLog.raw = { request: reqLogInfo, response: uploadResult };
+            throw new Error(`UploadFileParts returned false for "${name}" chunk #${chunkIndex}/${totalRelayChunks}`);
+        }
+
+        partLog.status = 'Success';
+        partLog.raw = { request: reqLogInfo, response: uploadResult };
+    }
+
+    // ── Result: return descriptor for the final payload ──────────────────────
+    return {
+        FileSecretKey: fileSecretKey,
+        Category: category,
+        Path: null,
+        FileSize: size
+    };
+}
+
 async function submitRelatedGridRow(projectName, formName, formFields, globalStore, executionLog = [], loginAs = null) {
     const logEntry = { key: `rg_${Date.now()}_${Math.random()}`, step: 'RelatedGrid Submit', details: `Form: ${formName}`, status: 'Pending' };
     executionLog.push(logEntry);
@@ -208,7 +478,7 @@ async function resolveMappedValueArray(mapping, rowData, globalStore, apiCache, 
         if (searchItems.length === 0) {
             executionLog.push({
                 key: `api_arr_skip_${Date.now()}_${Math.random()}`,
-                step: 'API Array Lookup',
+                step: 'API Request',
                 details: `Field: ${fieldName} -> Skipped (empty array)`,
                 status: 'Success'
             });
@@ -217,7 +487,7 @@ async function resolveMappedValueArray(mapping, rowData, globalStore, apiCache, 
 
         executionLog.push({
             key: `api_arr_${Date.now()}_${Math.random()}`,
-            step: 'API Array Lookup',
+            step: 'API Request',
             details: `Field: ${fieldName}, Items: ${JSON.stringify(searchItems)}`,
             status: 'Success'
         });
@@ -298,10 +568,12 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
                 const m = mapping.valuePath.match(/{{\s*([^{}]+?)\s*}}/);
                 if (m) parsedBody.loadOptions.valueExpr = m[1].trim();
             }
-            delete parsedBody.loadOptions.pagination;
+            parsedBody.loadOptions.pagination = {
+                skip: 0,
+                take: getApiPageSize(parsedBody)
+            };
             if (parsedBody.forceRefresh === undefined) parsedBody.forceRefresh = false;
             if (mapping.parameters && Array.isArray(mapping.parameters)) {
-                if (!Array.isArray(parsedBody.parameters)) parsedBody.parameters = [];
                 mapping.parameters.forEach(p => {
                     if (p.key) {
                         const rawVal = resolveTokens(p.value, rowData, objectContext);
@@ -311,11 +583,10 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
                             else if (rawVal.toLowerCase() === 'true') finalVal = true;
                             else if (rawVal.toLowerCase() === 'false') finalVal = false;
                         }
-                        const existingIdx = parsedBody.parameters.findIndex(item => item.key === p.key);
-                        if (existingIdx !== -1) parsedBody.parameters[existingIdx].value = finalVal;
-                        else parsedBody.parameters.push({ key: p.key, value: finalVal });
+                        parsedBody[p.key] = finalVal;
                     }
                 });
+                delete parsedBody.parameters;
             }
             resolvedBody = JSON.stringify(parsedBody);
         } catch (e) {
@@ -365,10 +636,8 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
             if (fetchOptions.method !== 'GET' && fetchOptions.method !== 'HEAD') {
                 fetchOptions.body = resolvedBody;
             }
-            const res = await fetchWithRetry(resolvedUrl, fetchOptions);
-            if (res.ok) {
-                const json = await res.json();
-                apiResultList = _.get(json, mapping.responsePath || 'result.result') || [];
+            apiResultList = await fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, mapping.responsePath);
+            if (Array.isArray(apiResultList)) {
                 apiCache.set(cacheKey, apiResultList);
                 if (apiCache.size > apiCacheLimit) {
                     const keysIter = apiCache.keys();
@@ -470,7 +739,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
         if (!trimmedKey || trimmedKey === 'null' || trimmedKey === 'undefined') {
             const apiLog = {
                 key: `api_skip_${Date.now()}_${Math.random()}`,
-                step: 'API Lookup',
+                step: 'API Request',
                 details: `Field: ${fieldName} -> Skipped (Excel search key ${mapping.searchKeyTemplate || ''} is empty)`,
                 status: 'Success'
             };
@@ -478,7 +747,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
             return { Value: null, Text: '' };
         }
 
-        const apiLog = { key: `api_${Date.now()}_${Math.random()}`, step: 'API Lookup', details: `Field: ${fieldName}, Query: "${trimmedKey}"`, status: 'Pending' };
+        const apiLog = { key: `api_${Date.now()}_${Math.random()}`, step: 'API Request', details: `Field: ${fieldName}, Query: "${trimmedKey}"`, status: 'Pending' };
         executionLog.push(apiLog);
 
         // Resolve URL/Body
@@ -514,20 +783,19 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
                     }
                 }
 
-                // 3. REMOVE pagination as requested by USER
-                delete parsedBody.loadOptions.pagination;
+                // 3. Page through all rows so API matching can see the full dataset.
+                parsedBody.loadOptions.pagination = {
+                    skip: 0,
+                    take: getApiPageSize(parsedBody)
+                };
                 
                 // 4. Ensure forceRefresh
                 if (parsedBody.forceRefresh === undefined) {
                     parsedBody.forceRefresh = false;
                 }
 
-                // 5. Handle Parameters in Synergy-Standard Array Format [{key, value}]
+                // 5. Handle Parameters: Attach directly to root object (as per user screenshot)
                 if (mapping.parameters && Array.isArray(mapping.parameters)) {
-                    if (!Array.isArray(parsedBody.parameters)) {
-                        parsedBody.parameters = [];
-                    }
-
                     mapping.parameters.forEach(p => {
                         if (p.key) {
                             const rawVal = resolveTokens(p.value, rowData, objectContext);
@@ -544,18 +812,13 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
                                 }
                             }
 
-                            // Check if parameter already exists in template, update or push
-                            const existingIdx = parsedBody.parameters.findIndex(item => item.key === p.key);
-                            if (existingIdx !== -1) {
-                                parsedBody.parameters[existingIdx].value = finalVal;
-                            } else {
-                                parsedBody.parameters.push({ key: p.key, value: finalVal });
-                            }
+                            // Attach to root of parsedBody
+                            parsedBody[p.key] = finalVal;
                         }
                     });
 
-                    // Log structure is now visible via the Step Detail icon (raw property),
-                    // so we keep the summary clean as requested.
+                    // Remove parameters array if it existed accidentally
+                    delete parsedBody.parameters;
                 }
 
                 resolvedBody = JSON.stringify(parsedBody);
@@ -580,56 +843,55 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
         const cacheKey = `${resolvedUrl}|${resolvedBody}`;
         let apiResultList = [];
 
+        const fetchOptions = {
+            method: mapping.apiType === 'Internal' ? 'POST' : (mapping.apiMethod || 'GET'),
+            headers: { 'Content-Type': 'application/json' }
+        };
+
+        if (mapping.apiType === 'Internal') {
+            const token = globalStore.get('token');
+            const encryptedData = globalStore.get('encryptedData');
+            const userLang = globalStore.get('language') || 'tr-TR';
+            if (token) fetchOptions.headers['Authorization'] = `Bearer ${token}`;
+            if (encryptedData) fetchOptions.headers['bimser-encrypted-data'] = encryptedData;
+            fetchOptions.headers['bimser-language'] = userLang;
+        }
+
+        if (mapping.apiHeaders) {
+            try {
+                const h = JSON.parse(resolvedHeaders);
+                fetchOptions.headers = { ...fetchOptions.headers, ...h };
+            } catch (e) {
+                // console.warn('Header parse error', e);
+            }
+        }
+
+        if (fetchOptions.method !== 'GET' && fetchOptions.method !== 'HEAD') {
+            fetchOptions.body = resolvedBody;
+        }
+
+        // Initialize apiLog.raw with request details so UI can always inspect it (even on cache hit)
+        apiLog.raw = {
+            request: {
+                url: resolvedUrl,
+                method: fetchOptions.method,
+                headers: fetchOptions.headers,
+                body: resolvedBody ? (function() { try { return JSON.parse(resolvedBody); } catch(e) { return resolvedBody; } })() : null
+            },
+            response: null
+        };
+
         if (apiCache.has(cacheKey)) {
             apiResultList = apiCache.get(cacheKey);
             // Update LRU by re-inserting
             apiCache.delete(cacheKey);
             apiCache.set(cacheKey, apiResultList);
+            apiLog.raw.response = { "message": "Loaded from cache", "cachedDataSize": apiResultList?.length };
         } else {
             try {
-                const fetchOptions = {
-                    method: mapping.apiType === 'Internal' ? 'POST' : (mapping.apiMethod || 'GET'),
-                    headers: { 'Content-Type': 'application/json' }
-                };
-
-                if (mapping.apiType === 'Internal') {
-                    const token = globalStore.get('token');
-                    const encryptedData = globalStore.get('encryptedData');
-                    const userLang = globalStore.get('language') || 'tr-TR';
-                    if (token) fetchOptions.headers['Authorization'] = `Bearer ${token}`;
-                    if (encryptedData) fetchOptions.headers['bimser-encrypted-data'] = encryptedData;
-                    fetchOptions.headers['bimser-language'] = userLang;
-                }
-
-                if (mapping.apiHeaders) {
-                    try {
-                        const h = JSON.parse(resolvedHeaders);
-                        fetchOptions.headers = { ...fetchOptions.headers, ...h };
-                    } catch (e) {
-                        // console.warn('Header parse error', e);
-                    }
-                }
-
-                if (fetchOptions.method !== 'GET' && fetchOptions.method !== 'HEAD') {
-                    fetchOptions.body = resolvedBody;
-                }
-
-                const res = await fetchWithRetry(resolvedUrl, fetchOptions);
-                if (res.ok) {
-                    const json = await res.json();
-                    apiResultList = _.get(json, mapping.responsePath || 'result.result') || [];
+                apiResultList = await fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, mapping.responsePath, apiLog);
+                if (Array.isArray(apiResultList)) {
                     apiCache.set(cacheKey, apiResultList);
-
-                    // Capture detailed info for diagnostics
-                    apiLog.raw = {
-                        request: {
-                            url: resolvedUrl,
-                            method: fetchOptions.method,
-                            headers: fetchOptions.headers,
-                            body: resolvedBody ? (function() { try { return JSON.parse(resolvedBody); } catch(e) { return resolvedBody; } })() : null
-                        },
-                        response: json
-                    };
 
                     // PREVENT MEMORY LEAK: Limit apiCache size with Map
                     if (apiCache.size > apiCacheLimit) {
@@ -848,9 +1110,10 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                     if (colType === 'RelatedDocument') {
                         const pathCol = colDef.mapping?.pathCol;
+                        const category = colDef.mapping?.category || 'DOCUMENTS';
                         if (pathCol) {
                             const filePathRaw = String(gridRow[pathCol] || '').trim();
-                            if (filePathRaw && window.api?.readFileAsBase64) {
+                            if (filePathRaw && window.api?.readFileAsBuffer) {
                                 let filePaths = [];
                                 try {
                                     const parsed = JSON.parse(filePathRaw);
@@ -863,25 +1126,48 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                     filePaths = [filePathRaw];
                                 }
 
+                                const deployUrl = globalStore.get('deployUrl');
+                                const fileBaseUrl = `${deployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer`;
+                                const fileHeaders = { 'Content-Type': 'application/json' };
+                                const token = globalStore.get('token');
+                                const encryptedData = globalStore.get('encryptedData');
+                                const userLang = globalStore.get('language') || 'tr-TR';
+                                if (token) fileHeaders['Authorization'] = `Bearer ${token}`;
+                                if (encryptedData) fileHeaders['bimser-encrypted-data'] = encryptedData;
+                                fileHeaders['bimser-language'] = userLang;
+
                                 const resolvedItems = [];
                                 for (const filePath of filePaths) {
-                                    const fileResult = await window.api.readFileAsBase64(filePath);
+                                    const fileResult = await window.api.readFileAsBuffer(filePath);
                                     if (fileResult.success) {
-                                        resolvedItems.push({
-                                            Name: fileResult.name,
-                                            ContentType: fileResult.contentType,
-                                            Extension: fileResult.extension,
-                                            Data: fileResult.data
-                                        });
+                                        try {
+                                            const descriptor = await uploadFileInParts(
+                                                fileBaseUrl,
+                                                fileHeaders,
+                                                fileResult,
+                                                category,
+                                                executionLog
+                                            );
+                                            resolvedItems.push(descriptor);
+                                        } catch (uploadErr) {
+                                            const errMsg = `RelatedDocument '${colDef.name}': upload failed for "${filePath}" - ${uploadErr.message}`;
+                                            executionLog.push({
+                                                key: `reldoc_upload_err_${Date.now()}_${Math.random()}`,
+                                                step: 'RelatedDocument Upload',
+                                                details: errMsg,
+                                                status: 'Error'
+                                            });
+                                            throw new Error(errMsg);
+                                        }
                                     } else {
                                         const errMsg = `RelatedDocument '${colDef.name}': failed to read file "${filePath}" - ${fileResult.error || 'Unknown error'}`;
-                                        warnings.push(errMsg);
                                         executionLog.push({
                                             key: `reldoc_err_${Date.now()}_${Math.random()}`,
                                             step: 'RelatedDocument Read',
                                             details: errMsg,
-                                            status: 'Warning'
+                                            status: 'Error'
                                         });
+                                        throw new Error(errMsg);
                                     }
                                 }
 
@@ -892,9 +1178,15 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                         Items: resolvedItems
                                     });
                                 }
-                            } else if (filePathRaw && !window.api?.readFileAsBase64) {
-                                const errMsg = `RelatedDocument '${colDef.name}': readFileAsBase64 API not available`;
-                                warnings.push(errMsg);
+                            } else if (filePathRaw && !window.api?.readFileAsBuffer) {
+                                const errMsg = `RelatedDocument '${colDef.name}': readFileAsBuffer API not available`;
+                                executionLog.push({
+                                    key: `reldoc_api_err_${Date.now()}_${Math.random()}`,
+                                    step: 'RelatedDocument Read',
+                                    details: errMsg,
+                                    status: 'Error'
+                                });
+                                throw new Error(errMsg);
                             }
                         }
                         continue; // Skip to next column
@@ -945,12 +1237,12 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         }
                         if (Array.isArray(obj.Items)) {
                             relatedDocsMap[obj.FieldName].Items.push(...obj.Items);
-                        } else {
+                        } else if (obj.FileSecretKey) {
                             relatedDocsMap[obj.FieldName].Items.push({
-                                Name: obj.Name || 'Document.pdf',    // Default fallback to prevent crash
-                                ContentType: obj.ContentType || 'application/octet-stream',
-                                Extension: obj.Extension || '.pdf',
-                                Data: obj.Data
+                                FileSecretKey: obj.FileSecretKey,
+                                Category: obj.Category,
+                                Path: obj.Path,
+                                FileSize: obj.FileSize
                             });
                         }
                     } else {
@@ -1104,9 +1396,10 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     }
                 } else if (type === 'RelatedDocument') {
                     const pathCol = mapping.pathCol;
+                    const category = mapping.category || 'DOCUMENTS';
                     if (pathCol) {
                         const filePathRaw = String(getRowValue(rowData, pathCol) || '').trim();
-                        if (filePathRaw && window.api?.readFileAsBase64) {
+                        if (filePathRaw && window.api?.readFileAsBuffer) {
                             let filePaths = [];
                             try {
                                 const parsed = JSON.parse(filePathRaw);
@@ -1119,25 +1412,47 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                 filePaths = [filePathRaw];
                             }
 
+                            const fileBaseUrl = `${deployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer`;
+                            const fileHeaders = { 'Content-Type': 'application/json' };
+                            const token = globalStore.get('token');
+                            const encryptedData = globalStore.get('encryptedData');
+                            const userLang = globalStore.get('language') || 'tr-TR';
+                            if (token) fileHeaders['Authorization'] = `Bearer ${token}`;
+                            if (encryptedData) fileHeaders['bimser-encrypted-data'] = encryptedData;
+                            fileHeaders['bimser-language'] = userLang;
+
                             const resolvedItems = [];
                             for (const filePath of filePaths) {
-                                const fileResult = await window.api.readFileAsBase64(filePath);
+                                const fileResult = await window.api.readFileAsBuffer(filePath);
                                 if (fileResult.success) {
-                                    resolvedItems.push({
-                                        Name: fileResult.name,
-                                        ContentType: fileResult.contentType,
-                                        Extension: fileResult.extension,
-                                        Data: fileResult.data
-                                    });
+                                    try {
+                                        const descriptor = await uploadFileInParts(
+                                            fileBaseUrl,
+                                            fileHeaders,
+                                            fileResult,
+                                            category,
+                                            executionLog
+                                        );
+                                        resolvedItems.push(descriptor);
+                                    } catch (uploadErr) {
+                                        const errMsg = `RelatedDocument '${def.name}': upload failed for "${filePath}" - ${uploadErr.message}`;
+                                        executionLog.push({
+                                            key: `reldoc_upload_err_${Date.now()}_${Math.random()}`,
+                                            step: 'RelatedDocument Upload',
+                                            details: errMsg,
+                                            status: 'Error'
+                                        });
+                                        throw new Error(errMsg);
+                                    }
                                 } else {
                                     const errMsg = `RelatedDocument '${def.name}': failed to read file "${filePath}" - ${fileResult.error || 'Unknown error'}`;
-                                    warnings.push(errMsg);
                                     executionLog.push({
                                         key: `reldoc_err_${Date.now()}_${Math.random()}`,
                                         step: 'RelatedDocument Read',
                                         details: errMsg,
-                                        status: 'Warning'
+                                        status: 'Error'
                                     });
+                                    throw new Error(errMsg);
                                 }
                             }
 
@@ -1148,6 +1463,15 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                     Items: resolvedItems
                                 };
                             }
+                        } else if (filePathRaw && !window.api?.readFileAsBuffer) {
+                            const errMsg = `RelatedDocument '${def.name}': readFileAsBuffer API not available`;
+                            executionLog.push({
+                                key: `reldoc_api_err_${Date.now()}_${Math.random()}`,
+                                step: 'RelatedDocument Read',
+                                details: errMsg,
+                                status: 'Error'
+                            });
+                            throw new Error(errMsg);
                         } else if (!filePathRaw) {
                             console.warn(`[RelatedDocument] No file path in column "${pathCol}" for this row.`);
                         }

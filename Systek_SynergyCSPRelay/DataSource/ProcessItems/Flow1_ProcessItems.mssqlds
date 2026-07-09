@@ -1,0 +1,179 @@
+{
+  "name": "Flow1_ProcessItems",
+  "connectionId": "87c40202-508f-4066-9178-8eab73853c28",
+  "connectionType": 1,
+  "description": {},
+  "id": null,
+  "properties": {
+    "enableCache": false,
+    "commandText": "DECLARE @DefaultLanguage NVARCHAR(11)\nSELECT TOP 1 @DefaultLanguage = CULTURE from LANGUAGES WHERE ISDEFAULT = 1\nDECLARE @MobileFormView INT\nDECLARE @ProjectId NVARCHAR(38)\nSELECT TOP 1 @MobileFormView = MOBILEFORMVIEW, @ProjectId = ID FROM PROJECTS WHERE NAME={{ProjectName}} AND STATUS=1 AND DELETEDAT IS NULL\nDECLARE @FlowId NVARCHAR(38)\nSELECT TOP 1 @FlowId = ID FROM PROJECTFLOWS WHERE NAME={{FlowName}} AND PROJECTID=@ProjectId\n\nSELECT\n    PROCESSES.ID AS ProcessId,\n    PROCESSREQUESTS.ID AS RequestId,\n    CREATORUSER.NAME AS ProcessCreator,\n    PROCESSES.CREATEDATE AS ProcessStartDate,\n    FLOWSTATUS.STATUSID AS ProcessStatusNo,\n    COALESCE(NULLIF(PROJECTFLOWSTATUSESML_UserCulture.CAPTION, ''), NULLIF(PROJECTFLOWSTATUSESML_DefaultCulture.CAPTION, ''), NULLIF(PROJECTFLOWSTATUSESML_SystemCulture.CAPTION, '')) AS ProcessStatus,\n    PUBLISHMENT.PACKAGEVERSION AS PackageVersion,\n    PROCESSREQUESTS.REQUESTDATE AS RequestDate,\n    PROCESSREQUESTS.EVENTS AS Events,\n    @MobileFormView AS MobileFormView\nFROM PROCESSREQUESTS WITH(NOLOCK)\nLEFT JOIN PROCESSES WITH(NOLOCK) ON PROCESSES.ID = PROCESSREQUESTS.PROCESSID\n\n\nOUTER APPLY (SELECT TOP 1 CONCAT(OSUSERS.FIRSTNAME, ' ', OSUSERS.LASTNAME) NAME FROM OSUSERS WITH(NOLOCK) WHERE OSUSERS.ID = PROCESSES.USERID) CREATORUSER\nOUTER APPLY (SELECT TOP 1 STATUSID FROM PROJECTFLOWSTATUSES WITH(NOLOCK) WHERE PROJECTFLOWSTATUSES.ID = PROCESSES.FLOWSTATUSID) FLOWSTATUS\nOUTER APPLY (SELECT TOP 1 CAPTION FROM PROJECTFLOWSTATUSESML WITH(NOLOCK) WHERE PROJECTFLOWSTATUSESML.FLOWSTATUSID=PROCESSES.FLOWSTATUSID AND PROJECTFLOWSTATUSESML.CULTURE = {{Culture}}) PROJECTFLOWSTATUSESML_UserCulture\nOUTER APPLY (SELECT TOP 1 CAPTION FROM PROJECTFLOWSTATUSESML WITH(NOLOCK) WHERE PROJECTFLOWSTATUSESML.FLOWSTATUSID=PROCESSES.FLOWSTATUSID AND PROJECTFLOWSTATUSESML.CULTURE = @DefaultLanguage) PROJECTFLOWSTATUSESML_DefaultCulture\nOUTER APPLY (SELECT TOP 1 CAPTION FROM PROJECTFLOWSTATUSESML WITH(NOLOCK) WHERE PROJECTFLOWSTATUSESML.FLOWSTATUSID=PROCESSES.FLOWSTATUSID AND PROJECTFLOWSTATUSESML.CULTURE = 'system') PROJECTFLOWSTATUSESML_SystemCulture\nOUTER APPLY (SELECT TOP 1 PACKAGEVERSION FROM PROJECTCOREDEPLOYMENTS WITH(NOLOCK) LEFT JOIN PROJECTCOREPUBLISHMENTS WITH(NOLOCK) ON PROJECTCOREPUBLISHMENTS.ID = PROJECTCOREDEPLOYMENTS.PUBLISHMENTID WHERE PROJECTCOREDEPLOYMENTS.ID = PROCESSES.DEPLOYMENTID) PUBLISHMENT\n\n\nWHERE {{StartDate}}={{EndDate}} AND {{RequestId}}=0 AND\n    PROCESSES.PROJECTID = @ProjectId AND\n    PROCESSES.FLOWID = @FlowId AND\n    (PROCESSREQUESTS.POSITIONID IN ({{Positions}}) OR (PROCESSREQUESTS.USERID IN ({{Users}}) AND PROCESSREQUESTS.POSITIONID IS NULL))\nORDER BY PROCESSREQUESTS.ID DESC\n\n",
+    "parameters": [
+      {
+        "caption": "",
+        "isActive": true,
+        "isRequired": true,
+        "key": "Users",
+        "value": [
+          1
+        ],
+        "valueType": 10,
+        "length": 10000,
+        "subType": 3
+      },
+      {
+        "caption": "",
+        "isActive": true,
+        "isRequired": true,
+        "key": "Positions",
+        "value": [
+          0
+        ],
+        "valueType": 10,
+        "length": 1000,
+        "subType": 3
+      },
+      {
+        "caption": "Culture",
+        "isActive": true,
+        "isRequired": true,
+        "key": "Culture",
+        "value": "%User.Language%",
+        "valueType": 1,
+        "length": 10
+      },
+      {
+        "caption": "EndDate",
+        "isActive": true,
+        "isRequired": true,
+        "key": "EndDate",
+        "value": "2021-09-25T18:48:29+00:00",
+        "valueType": 6,
+        "length": 100
+      },
+      {
+        "caption": "StartDate",
+        "isActive": true,
+        "isRequired": true,
+        "key": "StartDate",
+        "value": "2021-09-25T18:48:29+00:00",
+        "valueType": 6,
+        "length": 100
+      },
+      {
+        "caption": "FlowName",
+        "isActive": true,
+        "isRequired": true,
+        "key": "FlowName",
+        "value": "Flow1",
+        "valueType": 1,
+        "length": 200
+      },
+      {
+        "caption": "ProjectName",
+        "isActive": true,
+        "isRequired": true,
+        "key": "ProjectName",
+        "value": "Systek_SynergyCSPRelay",
+        "valueType": 1,
+        "length": 500
+      },
+      {
+        "caption": "RequestId",
+        "isActive": true,
+        "isRequired": true,
+        "key": "RequestId",
+        "value": 0,
+        "valueType": 3,
+        "length": 1000
+      }
+    ],
+    "commandType": 1,
+    "executionType": 3
+  },
+  "structure": {
+    "columns": [
+      {
+        "name": "RequestId",
+        "caption": "RequestId",
+        "mlCaption": {
+          "tr-TR": "İstek Numarası",
+          "en-US": "Request Number",
+          "ru-RU": "Номер запроса",
+          "az-Latn-AZ": "Sorğu Nömrəsi"
+        },
+        "type": 3,
+        "controlProperties": null,
+        "displayFormat": null
+      },
+      {
+        "name": "ProcessCreator",
+        "caption": "ProcessCreator",
+        "mlCaption": {
+          "tr-TR": "Süreci Başlatan",
+          "en-US": "Process Creator",
+          "ru-RU": "Создатель процесса",
+          "az-Latn-AZ": "Proses Yaradan"
+        },
+        "type": 1,
+        "controlProperties": null,
+        "displayFormat": null
+      },
+      {
+        "name": "ProcessStartDate",
+        "caption": "ProcessStartDate",
+        "mlCaption": {
+          "tr-TR": "Süreç Başlangıç Tarihi",
+          "en-US": "Process Start Date",
+          "ru-RU": "Дата начала процесса",
+          "az-Latn-AZ": "Prosesin Başlama Tarixi"
+        },
+        "type": 12,
+        "controlProperties": null,
+        "displayFormat": null
+      },
+      {
+        "name": "ProcessStatus",
+        "caption": "ProcessStatus",
+        "mlCaption": {
+          "tr-TR": "Süreç Durumu",
+          "en-US": "Process Status",
+          "ru-RU": "Статус процесса",
+          "az-Latn-AZ": "Proses Vəziyyəti"
+        },
+        "type": 1,
+        "controlProperties": null,
+        "displayFormat": null
+      },
+      {
+        "name": "RequestDate",
+        "caption": "RequestDate",
+        "mlCaption": {
+          "tr-TR": "İstek Tarihi",
+          "en-US": "Request Date",
+          "ru-RU": "Дата запроса",
+          "az-Latn-AZ": "Sorğu Tarixi"
+        },
+        "type": 6,
+        "controlProperties": null,
+        "displayFormat": null
+      },
+      {
+        "name": "Events",
+        "caption": "Events",
+        "mlCaption": {
+          "tr-TR": "Olaylar",
+          "en-US": "Events",
+          "ru-RU": "События",
+          "az-Latn-AZ": "Hadisələr"
+        },
+        "type": 17,
+        "controlProperties": null,
+        "displayFormat": null
+      }
+    ],
+    "returnType": 10
+  },
+  "connectionName": {
+    "tr-TR": "SystemDefaultConnection"
+  }
+}
