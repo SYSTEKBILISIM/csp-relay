@@ -504,3 +504,89 @@ td.ant-table-cell:has(.ant-empty-description) {
     flex: 1;
     overflow-y: auto !important;
 }
+
+.log-primary-tabs > .ant-tabs-nav {
+    align-self: flex-start;
+    padding: 5px;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.log-primary-tabs > .ant-tabs-nav::before {
+    display: none;
+}
+
+.log-primary-tabs > .ant-tabs-nav .ant-tabs-nav-wrap {
+    padding: 0;
+}
+
+.log-primary-tabs > .ant-tabs-nav .ant-tabs-nav-list {
+    gap: 4px;
+}
+
+.log-primary-tabs > .ant-tabs-nav .ant-tabs-tab {
+    margin: 0;
+    padding: 8px 14px;
+    border-radius: 9px;
+    border: 1px solid transparent;
+    color: #475569;
+    transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.log-primary-tabs > .ant-tabs-nav .ant-tabs-tab:hover {
+    background: #eef6ff;
+    color: #0f172a;
+}
+
+.log-primary-tabs > .ant-tabs-nav .ant-tabs-tab-active {
+    background: #ffffff;
+    border-color: #bfdbfe;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+.log-primary-tabs > .ant-tabs-nav .ant-tabs-tab-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 650;
+}
+
+.log-primary-tabs > .ant-tabs-nav .ant-tabs-tab-active .ant-tabs-tab-btn {
+    color: #0284c7;
+}
+
+.log-primary-tabs > .ant-tabs-nav .ant-tabs-ink-bar {
+    display: none;
+}
+
+.paged-step-tabs.ant-tabs-left > .ant-tabs-nav {
+    width: 176px;
+    min-width: 176px;
+    flex: 0 0 176px;
+}
+
+.paged-step-tabs.ant-tabs-left > .ant-tabs-nav .ant-tabs-nav-list {
+    width: 100%;
+}
+
+.paged-step-tabs.ant-tabs-left > .ant-tabs-nav .ant-tabs-tab {
+    width: 100%;
+    margin: 0;
+    padding: 12px 18px;
+}
+
+.paged-step-tabs.ant-tabs-left > .ant-tabs-nav .ant-tabs-tab + .ant-tabs-tab {
+    margin-top: 4px;
+}
+
+.paged-step-tabs.ant-tabs-left > .ant-tabs-nav .ant-tabs-tab-btn {
+    width: 100%;
+    text-align: left;
+}
+
+.paged-step-tabs.ant-tabs-left > .ant-tabs-content-holder {
+    min-width: 0;
+}

@@ -1,0 +1,167 @@
+{
+  "data": {
+    "Form1": {
+      "properties": {
+        "ddl": {
+          "name": "Form1"
+        },
+        "text": {
+          "tr-TR": "Form1",
+          "en-US": "Form1",
+          "ru-RU": "Form1",
+          "az-Latn-AZ": "Form1"
+        },
+        "caption": {
+          "text": {
+            "tr-TR": "Form1",
+            "en-US": "Form1",
+            "ru-RU": "Form1",
+            "az-Latn-AZ": "Form1"
+          }
+        },
+        "toolbarButtons": [
+          {
+            "key": "toolbarSaveButton",
+            "name": "Save",
+            "icon": "save",
+            "enabled": true,
+            "caption": {
+              "tr-TR": "Kaydet",
+              "en-US": "Save",
+              "ru-RU": "Сохранять",
+              "az-Latn-AZ": "Yadda Saxla"
+            },
+            "validate": false
+          },
+          {
+            "key": "toolbarSaveAsButton",
+            "name": "Save As",
+            "icon": "save-as",
+            "enabled": false,
+            "caption": {
+              "tr-TR": "Farklı Kaydet",
+              "en-US": "Save As",
+              "ru-RU": "Сохранить как",
+              "az-Latn-AZ": "Fərqli Saxla"
+            },
+            "validate": false
+          }
+        ],
+        "name": "Form1",
+        "controlId": "828db4bd-b900-4755-9dea-38c42fb3b45f",
+        "controlType": "Form",
+        "publicFields": [
+          {
+            "field": "CREATOR",
+            "caption": "Creator",
+            "visible": true,
+            "displayFormat": ""
+          },
+          {
+            "field": "CREATEDATE",
+            "caption": "Create Date",
+            "visible": true,
+            "displayFormat": ""
+          },
+          {
+            "field": "FORMCAPTION",
+            "caption": "Form Caption",
+            "visible": false,
+            "displayFormat": ""
+          },
+          {
+            "field": "DOCUMENTID",
+            "caption": "Document Id",
+            "visible": false,
+            "displayFormat": ""
+          },
+          {
+            "field": "STATUSTEXT",
+            "caption": "Status",
+            "visible": false,
+            "displayFormat": ""
+          },
+          {
+            "field": "STATUS",
+            "caption": "Status Id",
+            "visible": false,
+            "displayFormat": ""
+          },
+          {
+            "field": "ID",
+            "caption": "Global Id",
+            "visible": false,
+            "displayFormat": ""
+          }
+        ]
+      },
+      "id": "Form1",
+      "type": "Form"
+    }
+  },
+  "views": {
+    "default": {
+      "entities": {
+        "items": {
+          "Form1": {
+            "designerProps": {
+              "allowAutoClear": false,
+              "selected": true,
+              "locked": false,
+              "layout": {
+                "width": null,
+                "visible": true,
+                "clientVisible": true
+              }
+            },
+            "parentId": null,
+            "items": [
+              "Section1"
+            ],
+            "id": "Form1",
+            "type": "Form"
+          },
+          "Section1": {
+            "designerProps": {
+              "selected": false,
+              "locked": false,
+              "layout": {
+                "width": null,
+                "visible": true,
+                "clientVisible": true
+              }
+            },
+            "parentId": "Form1",
+            "items": [
+              "Column1"
+            ],
+            "id": "Section1",
+            "type": "Section"
+          },
+          "Column1": {
+            "designerProps": {
+              "selected": false,
+              "locked": false,
+              "layout": {
+                "width": null,
+                "visible": true,
+                "clientVisible": true
+              }
+            },
+            "parentId": "Section1",
+            "items": [],
+            "id": "Column1",
+            "type": "Column"
+          }
+        },
+        "ghostItems": {}
+      },
+      "result": [
+        "Form1"
+      ],
+      "description": null
+    }
+  },
+  "activeView": "default",
+  "version": 36
+}

@@ -3,7 +3,8 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 // Custom APIs for renderer
 const api = {
-    readFileAsBase64: (filePath) => ipcRenderer.invoke('read-file-as-base64', filePath)
+    readFileAsBase64: (filePath) => ipcRenderer.invoke('read-file-as-base64', filePath),
+    readFileAsBuffer: (filePath) => ipcRenderer.invoke('read-file-as-buffer', filePath)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

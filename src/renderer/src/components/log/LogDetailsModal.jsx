@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, Tabs, Tag, Space, Typography, Table, Button, Tooltip, Input, App } from 'antd';
+import { Modal, Tabs, Tag, Space, Typography, Table, Button, Tooltip, App } from 'antd';
 import {
     InfoCircleOutlined,
     CloudUploadOutlined,
@@ -67,18 +67,48 @@ export const CopyAnimatedButton = ({ text }) => {
     );
 };
 
+const getStepPages = (stepDetails) => {
+    const raw = stepDetails?.raw || {};
+    if (Array.isArray(raw.pages) && raw.pages.length > 0) return raw.pages;
+
+    const responsePages = raw.response?.pages;
+    if (!Array.isArray(responsePages) || responsePages.length === 0) return [];
+
+    return responsePages.map((page) => {
+        const request = raw.request ? JSON.parse(JSON.stringify(raw.request)) : {};
+        if (request.body && page.pagination) {
+            request.body.loadOptions = request.body.loadOptions || {};
+            request.body.loadOptions.pagination = page.pagination;
+        }
+        return { ...page, request };
+    });
+};
+
+const getPagedSummary = (stepDetails, pages) => ({
+    requestCount: pages.length,
+    pageSize: stepDetails?.raw?.response?.pagination?.pageSize || pages[0]?.pagination?.take,
+    totalItems: stepDetails?.raw?.response?.pagination?.totalItems || pages.reduce((sum, page) => sum + (Number(page.count) || 0), 0),
+    pages: pages.map((page, index) => ({
+        page: index + 1,
+        pagination: page.pagination,
+        count: page.count
+    }))
+});
+
 export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle }) => {
-    const { message } = App.useApp();
     const [stepDetails, setStepDetails] = useState(null);
     const [stepModalVisible, setStepModalVisible] = useState(false);
 
     const executionLog = selectedLog?.details?.executionLog || selectedLog?.executionLog || [];
+    const stepPages = getStepPages(stepDetails);
+    const hasStepPages = stepPages.length > 0;
+    const stepPagesSummary = getPagedSummary(stepDetails, stepPages);
 
     return (
         <>
             <Modal
                 title={
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: 'calc(100% - 24px)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: 'calc(100% - 10px)' }}>
                         <Space align="center" size={12}>
                             <span style={{ fontSize: 18, fontWeight: 700, color: '#1e293b' }}>Request #{selectedLog?.id} Details</span>
                             {selectedLog && (
@@ -117,15 +147,20 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                 open={visible}
                 onCancel={onCancel}
                 footer={null}
-                width={1100}
-                style={{ top: 50 }}
+                width="min(1280px, calc(100vw - 96px))"
+                style={{ top: 40 }}
                 styles={{
+                    content: {
+                        maxHeight: 'calc(100vh - 80px)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden'
+                    },
                     header: { borderBottom: '1px solid #f1f5f9', padding: '16px 24px', userSelect: 'text' },
                     body: {
-                        padding: '8px 24px 24px 24px',
-                        height: 'calc(100vh - 180px)',
-                        minHeight: '450px',
-                        maxHeight: '620px',
+                        flex: 1,
+                        height: 'calc(100vh - 148px)',
+                        minHeight: 0,
                         display: 'flex',
                         flexDirection: 'column',
                         overflowY: 'hidden',
@@ -171,10 +206,9 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
 
                         <Tabs
                             defaultActiveKey="1"
-                            type="card"
-                            className="log-details-tabs"
-                            tabBarStyle={{ margin: '0 36px', marginBottom: 0 }}
-                            style={{ marginTop: '-12px', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+                            className="log-details-tabs log-primary-tabs"
+                            tabBarStyle={{ margin: '0 24px 12px 24px' }}
+                            style={{ marginTop: '-8px', flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
                             items={[
                                 {
                                     key: '1',
@@ -285,7 +319,7 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                         <Space align="center" size={12}>
                             <InfoCircleOutlined style={{ color: '#3b82f6', fontSize: 18 }} />
                             <span style={{ fontSize: 16, fontWeight: 700, color: '#1e293b' }}>Step Details: {stepDetails?.step}</span>
-                            <Tag color={stepDetails?.status === 'Success' ? 'success' : 'warning'} style={{
+                            <Tag color={stepDetails?.status === 'Success' ? 'success' : stepDetails?.status === 'Warning' ? 'warning' : stepDetails?.status === 'Pending' ? 'processing' : 'error'} style={{
                                 margin: 0,
                                 fontWeight: 700,
                                 borderRadius: 4,
@@ -301,15 +335,21 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                 footer={[
                     <Button key="close" onClick={() => setStepModalVisible(false)} style={{ borderRadius: 8 }}>Close</Button>
                 ]}
-                width={950}
+                width="min(1180px, calc(100vw - 120px))"
                 style={{ top: 50 }}
                 styles={{
+                    content: {
+                        maxHeight: 'calc(100vh - 80px)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        overflow: 'hidden'
+                    },
                     header: { borderBottom: '1px solid #f1f5f9', padding: '16px 24px', userSelect: 'text' },
                     body: {
                         padding: 0,
-                        height: 'calc(100vh - 250px)',
-                        minHeight: '350px',
-                        maxHeight: '550px',
+                        flex: 1,
+                        height: 'calc(100vh - 212px)',
+                        minHeight: 0,
                         display: 'flex',
                         flexDirection: 'column',
                         overflowY: 'hidden',
@@ -319,89 +359,152 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
             >
                 {stepDetails && (
                     <Tabs
-                        className="log-details-tabs"
+                        className="log-details-tabs log-primary-tabs"
                         style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
-                        tabBarStyle={{ padding: '0 24px', marginBottom: 0 }}
+                        tabBarStyle={{ margin: '12px 24px 12px 24px' }}
                         items={[
                             {
                                 key: 'request',
-                                label: <Space><CloudUploadOutlined /> Request Payload</Space>,
+                                label: <Space><CloudUploadOutlined /> Request Payload{hasStepPages ? <Tag color="blue">{stepPages.length} requests</Tag> : null}</Space>,
                                 children: (
                                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                                        <div style={{
-                                            padding: '16px 24px',
-                                            background: '#f8fafc',
-                                            borderBottom: '1px solid #e2e8f0',
-                                            flexShrink: 0
-                                        }}>
-                                            <Text type="secondary" style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', marginBottom: 8, display: 'block' }}>Endpoint URL</Text>
-                                            <Input
-                                                readOnly
-                                                value={stepDetails.raw?.request?.url}
-                                                addonBefore={
-                                                    <div style={{
-                                                        fontWeight: 800,
-                                                        fontSize: '11px',
-                                                        color: stepDetails.raw?.request?.method === 'POST' ? '#0ea5e9' : '#6366f1',
-                                                        padding: '0 8px',
-                                                        minWidth: 40,
-                                                        textAlign: 'center'
-                                                    }}>
-                                                        {stepDetails.raw?.request?.method || 'POST'}
-                                                    </div>
-                                                }
-                                                suffix={
-                                                    <Tooltip title="Copy URL">
-                                                        <Button
-                                                            size="small"
-                                                            type="text"
-                                                            icon={<CopyOutlined style={{ color: '#94a3b8' }} />}
-                                                            onClick={() => {
-                                                                navigator.clipboard.writeText(stepDetails.raw?.request?.url);
-                                                                message.success('URL copied');
-                                                            }}
-                                                        />
-                                                    </Tooltip>
-                                                }
-                                                style={{
-                                                    borderRadius: '8px',
-                                                    overflow: 'hidden',
-                                                    fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
-                                                    fontSize: '12px',
-                                                    boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
-                                                }}
+                                        {hasStepPages ? (
+                                            <Tabs
+                                                className="paged-step-tabs"
+                                                size="small"
+                                                tabPosition="left"
+                                                style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
+                                                items={[
+                                                    {
+                                                        key: 'all',
+                                                        label: 'All Pages',
+                                                        children: (
+                                                            <div style={{ height: '100%', position: 'relative' }}>
+                                                                <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
+                                                                    <CopyAnimatedButton text={JSON.stringify(stepPages.map(page => page.request || {}), null, 2)} />
+                                                                </div>
+                                                                <Editor
+                                                                    height="100%"
+                                                                    defaultLanguage="json"
+                                                                    value={safeJsonFormat(stepPages.map(page => page.request || {}))}
+                                                                    options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
+                                                                />
+                                                            </div>
+                                                        )
+                                                    },
+                                                    ...stepPages.map((page, index) => ({
+                                                        key: `page-${index}`,
+                                                        label: `Page ${index + 1} (${page.pagination?.skip || 0}-${(page.pagination?.skip || 0) + (page.pagination?.take || 0)})`,
+                                                        children: (
+                                                            <div style={{ height: '100%', position: 'relative' }}>
+                                                                <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
+                                                                    <CopyAnimatedButton text={JSON.stringify(page.request || {}, null, 2)} />
+                                                                </div>
+                                                                <Editor
+                                                                    height="100%"
+                                                                    defaultLanguage="json"
+                                                                    value={safeJsonFormat(page.request || {})}
+                                                                    options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
+                                                                />
+                                                            </div>
+                                                        )
+                                                    }))
+                                                ]}
                                             />
-                                        </div>
-                                        <div style={{ flex: 1, position: 'relative' }}>
-                                            <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
-                                                <CopyAnimatedButton text={JSON.stringify(stepDetails.raw?.request || {}, null, 2)} />
+                                        ) : (
+                                            <div style={{ flex: 1, position: 'relative' }}>
+                                                <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
+                                                    <CopyAnimatedButton text={JSON.stringify(stepDetails.raw?.request || {}, null, 2)} />
+                                                </div>
+                                                <Editor
+                                                    height="100%"
+                                                    defaultLanguage="json"
+                                                    value={safeJsonFormat(stepDetails.raw?.request || {})}
+                                                    options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
+                                                />
                                             </div>
-                                            <Editor
-                                                height="100%"
-                                                defaultLanguage="json"
-                                                value={safeJsonFormat(stepDetails.raw?.request || {})}
-                                                options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
-                                            />
-                                        </div>
+                                        )}
                                     </div>
                                 )
                             },
                             {
                                 key: 'response',
-                                label: <Space><CloudDownloadOutlined /> Response Body</Space>,
+                                label: <Space><CloudDownloadOutlined /> Response Body{hasStepPages ? <Tag color="blue">{stepPagesSummary.totalItems} rows</Tag> : null}</Space>,
                                 children: (
                                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                                        <div style={{ flex: 1, position: 'relative' }}>
-                                            <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
-                                                <CopyAnimatedButton text={JSON.stringify(stepDetails.raw?.response || {}, null, 2)} />
-                                            </div>
-                                            <Editor
-                                                height="100%"
-                                                defaultLanguage="json"
-                                                value={safeJsonFormat(stepDetails.raw?.response || {})}
-                                                options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
+                                        {hasStepPages ? (
+                                            <Tabs
+                                                className="paged-step-tabs"
+                                                size="small"
+                                                tabPosition="left"
+                                                style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}
+                                                items={[
+                                                    {
+                                                        key: 'all',
+                                                        label: 'All Pages',
+                                                        children: (
+                                                            <div style={{ height: '100%', position: 'relative' }}>
+                                                                <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
+                                                                    <CopyAnimatedButton text={JSON.stringify(stepPages, null, 2)} />
+                                                                </div>
+                                                                <Editor
+                                                                    height="100%"
+                                                                    defaultLanguage="json"
+                                                                    value={safeJsonFormat(stepPages)}
+                                                                    options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
+                                                                />
+                                                            </div>
+                                                        )
+                                                    },
+                                                    {
+                                                        key: 'summary',
+                                                        label: 'Summary',
+                                                        children: (
+                                                            <div style={{ height: '100%', position: 'relative' }}>
+                                                                <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
+                                                                    <CopyAnimatedButton text={JSON.stringify(stepPagesSummary, null, 2)} />
+                                                                </div>
+                                                                <Editor
+                                                                    height="100%"
+                                                                    defaultLanguage="json"
+                                                                    value={safeJsonFormat(stepPagesSummary)}
+                                                                    options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
+                                                                />
+                                                            </div>
+                                                        )
+                                                    },                                                    
+                                                    ...stepPages.map((page, index) => ({
+                                                        key: `page-${index}`,
+                                                        label: `Page ${index + 1} (${page.count || 0})`,
+                                                        children: (
+                                                            <div style={{ height: '100%', position: 'relative' }}>
+                                                                <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
+                                                                    <CopyAnimatedButton text={JSON.stringify(page.response || {}, null, 2)} />
+                                                                </div>
+                                                                <Editor
+                                                                    height="100%"
+                                                                    defaultLanguage="json"
+                                                                    value={safeJsonFormat(page.response || {})}
+                                                                    options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
+                                                                />
+                                                            </div>
+                                                        )
+                                                    }))
+                                                ]}
                                             />
-                                        </div>
+                                        ) : (
+                                            <div style={{ flex: 1, position: 'relative' }}>
+                                                <div className="copy-btn-floating" style={{ position: 'absolute', right: 16, top: 16, zIndex: 10 }}>
+                                                    <CopyAnimatedButton text={JSON.stringify(stepDetails.raw?.response || {}, null, 2)} />
+                                                </div>
+                                                <Editor
+                                                    height="100%"
+                                                    defaultLanguage="json"
+                                                    value={safeJsonFormat(stepDetails.raw?.response || {})}
+                                                    options={{ readOnly: true, minimap: { enabled: false }, fontSize: 12, scrollBeyondLastLine: false, automaticLayout: true, padding: { top: 16 } }}
+                                                />
+                                            </div>
+                                        )}
                                     </div>
                                 )
                             }

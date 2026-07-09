@@ -5,6 +5,7 @@ import { processRowAndExecute } from '../services/TransferService';
 import { logDB } from '../services/IndexedDBService';
 
 const MAX_DETAIL_LOGS = 500;
+const DEFAULT_WORK_UNITS = 1;
 
 // Reusable hook for transfer logic
 const cleanJson = (data) => {
@@ -18,6 +19,19 @@ const cleanJson = (data) => {
     } catch (e) {
         return data; // Not JSON, return as is (string)
     }
+};
+
+const getStepWorkUnits = (step) => {
+    const pageCount = step?.raw?.pages?.length;
+    if (Number.isFinite(pageCount) && pageCount > 1) return pageCount;
+    return DEFAULT_WORK_UNITS;
+};
+
+const getExecutionWorkUnits = (executionLog) => {
+    if (!Array.isArray(executionLog) || executionLog.length === 0) {
+        return DEFAULT_WORK_UNITS;
+    }
+    return executionLog.reduce((total, step) => total + getStepWorkUnits(step), 0);
 };
 
 export const useTransferExecution = (definitionData, onStatusChange) => {
@@ -71,8 +85,6 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     const isPausedRef = useRef(false);
     const apiCache = useRef(new Map());
     const allSheetsData = useRef({});
-    const totalTimeAccumulator = useRef(0);
-
     // Explicit visual metrics for Retry operations
     const [retryState, setRetryState] = useState({ isRetrying: false, total: 0, processed: 0 });
     const retryStateRef = useRef({ isRetrying: false, total: 0, processed: 0 });
@@ -222,16 +234,37 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setIsPausing(false);
         isPausingRef.current = false;
 
-        if (!isPaused && !isRetryContext) {
+        if (!isPaused) {
+            // ALWAYS clear cache when starting fresh or retrying
             apiCache.current = new Map();
-            totalTimeAccumulator.current = 0;
+        }
+        
+        if (!isPaused && !isRetryContext) {
             updateRetryState({ isRetrying: false, total: 0, processed: 0 });
         }
         setIsPaused(false);
         isPausedRef.current = false;
 
-        const targetCount = pendingRows.length;
         let sessionProcessedCount = 0; // Local counter for estimated time of current session
+        let sessionDurationAccumulator = 0;
+        let sessionWorkUnitsAccumulator = 0;
+
+        const updateEstimatedTimeFromWork = () => {
+            const avgMillisPerWorkUnit = sessionDurationAccumulator / Math.max(sessionWorkUnitsAccumulator, DEFAULT_WORK_UNITS);
+            const avgWorkUnitsPerRow = sessionWorkUnitsAccumulator / Math.max(sessionProcessedCount, 1);
+            const remainingWorkUnits = pendingRows
+                .slice(sessionProcessedCount)
+                .reduce((total, log) => total + (Number.isFinite(log.workUnits) && log.workUnits > 0 ? log.workUnits : avgWorkUnitsPerRow), 0);
+            const estSecs = (avgMillisPerWorkUnit * remainingWorkUnits) / 1000;
+
+            if (remainingWorkUnits > 0) {
+                const m = Math.floor(estSecs / 60);
+                const s = Math.round(estSecs % 60);
+                setEstimatedTime(m > 0 ? `${m}m ${s}s` : `${s}s`);
+            } else {
+                setEstimatedTime('0s');
+            }
+        };
 
         // Sync initial stats
         syncGlobalStats();
@@ -254,17 +287,17 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             activeLog.status = 'Processing';
             activeLog.message = 'Resolving fields and executing flow...';
 
-            if (isRetryContext || Date.now() - lastUpdate.current > 1000) {
-                setLogs([...logsStateRef.current]);
-                lastUpdate.current = Date.now();
-            }
+            setLogs([...logsStateRef.current]);
+            lastUpdate.current = Date.now();
 
             try {
                 const result = await processRowAndExecute(rowData, definitionData, globalStore, apiCache.current, allSheetsData.current);
                 duration = Date.now() - iterStart;
-                totalTimeAccumulator.current += duration;
+                sessionDurationAccumulator += duration;
 
                 sessionProcessedCount++;
+                activeLog.workUnits = getExecutionWorkUnits(result.executionLog);
+                sessionWorkUnitsAccumulator += activeLog.workUnits;
 
                 if (isRetryContext) {
                     updateRetryState({ processed: retryStateRef.current.processed + 1 });
@@ -299,7 +332,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             } catch (err) {
                 console.error(err);
                 duration = Date.now() - iterStart;
-                totalTimeAccumulator.current += duration;
+                sessionDurationAccumulator += duration;
 
                 const errMsg = err.message || 'Unknown Error';
                 const isValidation = err.isValidationError === true;
@@ -325,6 +358,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 activeLog.timestamp = new Date().toLocaleString();
 
                 sessionProcessedCount++;
+                activeLog.workUnits = getExecutionWorkUnits(detailObj.executionLog);
+                sessionWorkUnitsAccumulator += activeLog.workUnits;
 
                 if (isRetryContext) {
                     updateRetryState({ processed: retryStateRef.current.processed + 1 });
@@ -339,17 +374,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 syncGlobalStats();
             }
 
-            // Update estimated time based on session progress
-            const avgMillis = totalTimeAccumulator.current / Math.max(sessionProcessedCount, 1);
-            const remaining = targetCount - sessionProcessedCount;
-            const estSecs = (avgMillis * remaining) / 1000;
-            if (remaining > 0) {
-                const m = Math.floor(estSecs / 60);
-                const s = Math.round(estSecs % 60);
-                setEstimatedTime(m > 0 ? `${m}m ${s}s` : `${s}s`);
-            } else {
-                setEstimatedTime('0s');
-            }
+            // Update estimated time using operation/request weight, not only row count.
+            updateEstimatedTimeFromWork();
 
             await new Promise(resolve => setTimeout(resolve, 10));
         }

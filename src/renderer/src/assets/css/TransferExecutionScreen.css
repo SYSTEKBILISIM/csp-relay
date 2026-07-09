@@ -230,9 +230,25 @@
     display: flex;
     align-items: center;
     height: 34px;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
     white-space: nowrap;
     font-size: 12px;
     padding: 0;
+}
+
+.stable-cell>* {
+    min-width: 0;
+}
+
+.cell-ellipsis {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .highlight-mark {
@@ -267,8 +283,7 @@
 }
 
 .highlight-text-wrapper {
-    display: inline-flex;
-    align-items: center;
+    display: inline;
     line-height: 1;
 }
 
@@ -290,7 +305,7 @@
     height: 100%;
     overflow: hidden;
     background: #fff;
-    border-radius: 8px;
+    border-radius: 15px;
     border: 1px solid #e2e8f0;
 }
 
@@ -349,9 +364,34 @@
     text-align: left;
 }
 
+#queue-table-container .ant-table-selection-column,
+#results-table-container .ant-table-selection-column {
+    width: 38px !important;
+    min-width: 38px !important;
+    padding: 0 !important;
+    text-align: center !important;
+}
+
+#queue-table-container .ant-table-cell:first-child {
+    padding: 0 !important;
+    text-align: center !important;
+}
+
+#queue-table-container .ant-table-empty .ant-table-content,
+#results-table-container .ant-table-empty .ant-table-content {
+    overflow-x: hidden !important;
+}
+
+#queue-table-container .ant-table-placeholder .ant-table-cell,
+#results-table-container .ant-table-placeholder .ant-table-cell {
+    text-align: center !important;
+}
+
 .exec-container .ant-table-thead>tr>th {
     text-align: left !important;
     padding-left: 14px !important;
+    position: relative;
+    user-select: none;
 }
 
 /* Restrict to body rows for compact row alignment */
@@ -370,6 +410,7 @@
 }
 
 /* Header selection cell: use natural table cell alignment and center vertically */
+.exec-container .ant-table-thead>tr>th.ant-table-selection-column,
 .exec-container th.ant-table-selection-column {
     display: table-cell !important;
     padding: 0 !important;
@@ -391,4 +432,13 @@
 
 .exec-container .ant-table-row-selected>.ant-table-cell {
     background: #f0f9ff !important;
+}
+
+.log-details-tabs .editor-wrapper {
+    height: auto;
+    min-height: 0;
+}
+
+.log-details-tabs .ant-table-body {
+    max-height: none !important;
 }

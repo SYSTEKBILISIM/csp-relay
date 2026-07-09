@@ -4,7 +4,7 @@ import { Resizable } from 'react-resizable';
 export const ResizableTitle = (props) => {
     const { onResize, width, ...restProps } = props;
 
-    if (!width) {
+    if (!width || !onResize) {
         return <th {...restProps} />;
     }
 

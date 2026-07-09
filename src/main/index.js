@@ -90,6 +90,28 @@ app.whenReady().then(() => {
         }
     });
 
+    // IPC: Read a local file and return its metadata + raw buffer (for chunked UploadFileParts flow)
+    ipcMain.handle('read-file-as-buffer', async (_event, filePath) => {
+        try {
+            const buf = readFileSync(filePath);
+            const ext = extname(filePath); // e.g. ".pdf"
+            const fullName = basename(filePath); // e.g. "Test.pdf"
+            const contentType = mime.lookup(filePath) || 'application/octet-stream';
+
+            // Transfer the buffer as a plain Array so it survives IPC serialization
+            return {
+                success: true,
+                name: fullName,
+                extension: ext,
+                contentType,
+                size: buf.length,
+                buffer: Array.from(buf)
+            };
+        } catch (err) {
+            return { success: false, error: err.message };
+        }
+    });
+
 
     // Default open or close DevTools by F12 in development
     // and ignore CommandOrControl + R in production.
