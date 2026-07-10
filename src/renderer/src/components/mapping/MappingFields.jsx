@@ -3,7 +3,8 @@ import { Card, Form, Row, Col, Typography, Segmented, Select, Input, Space, Popo
 import {
     TableOutlined, BuildOutlined, PushpinOutlined, InfoCircleOutlined,
     LinkOutlined, ArrowRightOutlined, GlobalOutlined, SearchOutlined,
-    NodeIndexOutlined, EyeOutlined, InfoCircleFilled, ArrowLeftOutlined
+    NodeIndexOutlined, EyeOutlined, InfoCircleFilled, ArrowLeftOutlined,
+    FormOutlined
 } from '@ant-design/icons';
 import { ParametersList } from './ParametersList';
 
@@ -51,7 +52,7 @@ export const MappingFields = ({
     };
 
     const shouldFormUpdate = (prev, curr) => {
-        const fields = ["source", "dataType", "apiType", "apiUrl", "nonEmptyIsTrue", "otherValuesAreFalse", "parameters"];
+        const fields = ["source", "dataType", "apiType", "apiUrl", "nonEmptyIsTrue", "otherValuesAreFalse", "parameters", "controlName", "controlProperty"];
         for (const field of fields) {
             const path = getName(field);
             if (JSON.stringify(getNestedValue(prev, path)) !== JSON.stringify(getNestedValue(curr, path))) {
@@ -169,7 +170,8 @@ export const MappingFields = ({
                                 options={[
                                     { label: 'Excel', value: 'Excel', icon: <TableOutlined /> },
                                     { label: 'API', value: 'API', icon: <BuildOutlined /> },
-                                    { label: 'Fixed', value: 'Fixed', icon: <PushpinOutlined /> }
+                                    { label: 'Fixed', value: 'Fixed', icon: <PushpinOutlined /> },
+                                    { label: 'Form Field', value: 'FormControl', icon: <FormOutlined /> }
                                 ]}
                                 block
                                 size="middle"
@@ -632,6 +634,47 @@ export const MappingFields = ({
                                 </div>
                             )}
 
+                            {/* 3. Source: FORM CONTROL MODE */}
+                            {sourceState === 'FormControl' && (
+                                <div style={{
+                                    animation: 'fadeIn 0.2s',
+                                    background: '#f7fffb',
+                                    padding: '12px 14px',
+                                    borderRadius: '12px',
+                                    borderTop: '4px solid #10b981',
+                                    border: '1px solid #d1fae5'
+                                }}>
+                                    <Row gutter={16}>
+                                        <Col span={16}>
+                                            <Form.Item
+                                                name={getName("controlName")}
+                                                label={<Text strong style={{ fontSize: 12, color: '#065f46' }}>Source Form Field</Text>}
+                                                rules={[{ required: true, message: 'Please enter source form field' }]}
+                                                help={<Text type="secondary" style={{ fontSize: 10 }}>Reads from the live CSP form instance after fields are applied.</Text>}
+                                                style={{ marginBottom: 0 }}
+                                            >
+                                                <Input placeholder="e.g. dmDocumentNo" prefix={<FormOutlined style={{ color: '#10b981' }} />} />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col span={8}>
+                                            <Form.Item
+                                                name={getName("controlProperty")}
+                                                label={<Text strong style={{ fontSize: 12, color: '#065f46' }}>Property</Text>}
+                                                initialValue="Value"
+                                                style={{ marginBottom: 0 }}
+                                            >
+                                                <Select
+                                                    options={[
+                                                        { label: 'Value', value: 'Value' },
+                                                        { label: 'Text', value: 'Text' }
+                                                    ]}
+                                                />
+                                            </Form.Item>
+                                        </Col>
+                                    </Row>
+                                </div>
+                            )}
+
                             {/* 4. Source: FIXED VALUE MODE */}
                             {sourceState === 'Fixed' && (
                                 <div style={{
@@ -729,6 +772,11 @@ export const MappingFields = ({
                                                 Applies a static value: <Tag color="gold" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{fixedVal || '???'}</Tag> to all records.
                                             </span>
                                         )}
+                                    </Text>
+                                ) : src === 'FormControl' ? (
+                                    <Text style={{ fontSize: 12, color: '#334155' }}>
+                                        Reads <Tag color="green" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{getFieldValue(getName('controlName')) || '???'}</Tag>
+                                        {'.'}{getFieldValue(getName('controlProperty')) || 'Value'} from the CSP form instance.
                                     </Text>
                                 ) : null}
                             </div>
