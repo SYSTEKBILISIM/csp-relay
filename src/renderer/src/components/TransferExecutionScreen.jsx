@@ -456,6 +456,30 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         };
     });
 
+    const fitColumnWidthsToViewport = (widths, extraWidth = 0) => {
+        const entries = Object.entries(widths);
+        const totalWidth = entries.reduce((sum, [, width]) => sum + width, 0);
+        const availableWidth = tableViewportWidth - extraWidth;
+
+        if (availableWidth <= 0 || totalWidth <= availableWidth) return widths;
+
+        const scale = availableWidth / totalWidth;
+        const fittedWidths = Object.fromEntries(
+            entries.map(([key, width]) => [key, Math.max(key === 'details' ? 60 : 50, Math.floor(width * scale))])
+        );
+        const fittedTotal = Object.values(fittedWidths).reduce((sum, width) => sum + width, 0);
+
+        // Give rounding differences to the flexible content column so the table
+        // finishes exactly at the visible right edge.
+        if (fittedWidths.message && fittedWidths.message + availableWidth - fittedTotal >= 50) {
+            fittedWidths.message += availableWidth - fittedTotal;
+        } else if (fittedWidths.rowData && fittedWidths.rowData + availableWidth - fittedTotal >= 50) {
+            fittedWidths.rowData += availableWidth - fittedTotal;
+        }
+
+        return fittedWidths;
+    };
+
     const getScrollConfig = (widths, rowCount, extraWidth = 0) => {
         if (rowCount === 0) return undefined;
         return {
@@ -463,6 +487,9 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             y: tableScrollY
         };
     };
+
+    const fittedResultColWidths = fitColumnWidthsToViewport(resultColWidths);
+    const fittedQueueColWidths = fitColumnWidthsToViewport(queueColWidths, QUEUE_SELECTION_COLUMN_WIDTH);
 
 
 
@@ -1036,10 +1063,10 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                                 onRow={onQueueRow}
                                 rowSelection={rowSelection}
                                 dataSource={logs}
-                                columns={makeResizableColumns(queueColumns, queueColWidths, handleQueueResize)}
+                                columns={makeResizableColumns(queueColumns, fittedQueueColWidths, handleQueueResize)}
                                 pagination={false}
                                 virtual={logs.length > 0}
-                                scroll={getScrollConfig(queueColWidths, logs.length, QUEUE_SELECTION_COLUMN_WIDTH)}
+                                scroll={getScrollConfig(fittedQueueColWidths, logs.length, QUEUE_SELECTION_COLUMN_WIDTH)}
                                 size="small"
                                 rowKey="key"
                                 tableLayout="fixed"
@@ -1060,11 +1087,11 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                                 components={{ header: { cell: ResizableTitle } }}
                                 ref={resultsTableRef}
                                 dataSource={computedResultLogs}
-                                columns={makeResizableColumns(columns, resultColWidths, handleResultResize)}
+                                columns={makeResizableColumns(columns, fittedResultColWidths, handleResultResize)}
                                 pagination={false}
                                 virtual={computedResultLogs.length > 0}
                                 size="small"
-                                scroll={getScrollConfig(resultColWidths, computedResultLogs.length)}
+                                scroll={getScrollConfig(fittedResultColWidths, computedResultLogs.length)}
                                 rowKey="key"
                                 tableLayout="fixed"
                                 style={{ fontSize: '13px', width: '100%' }}

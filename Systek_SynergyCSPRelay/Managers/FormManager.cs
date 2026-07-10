@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Ataven.Helpers.ServiceAPIHelpers;
 using Ataven.Models;
@@ -12,6 +13,7 @@ using Bimser.Synergy.ServiceAPI;
 using Bimser.Synergy.ServiceAPI.Models.Form;
 using Bimser.Synergy.Entities.FormDesigner.Runtime.Enums;
 using Bimser.CSP.FormControls.Controls;
+using Newtonsoft.Json.Linq;
 
 namespace Ataven.Managers
 {
@@ -25,17 +27,33 @@ namespace Ataven.Managers
         }
         public async Task<SaveFormResultModel> CreateAndSave(CreateFormRequestModel request)
         {
-            FormInstance formInstance = _serviceAPI.FormManager.CreateWithoutView(request.ProjectName, request.FormName, 0, false, null, false, request.FormParameters).Result;
+            FormInstance formInstance = _serviceAPI.FormManager.CreateWithoutView(request.ProjectName, request.FormName, 0, false, null, false, ResolvePlainParameters(request.FormParameters)).Result;
             return this.SaveForm(formInstance, request.FormFields, request.FormParameters).Result;
         }
 
         public async Task<SaveFormResultModel> EditAndSave(EditFormRequestModel request)
         {
-            FormInstance formInstance = _serviceAPI.FormManager.CreateWithoutView(request.ProjectName, request.FormName, request.DocumentId, false, null, false, request.FormParameters).Result;
+            FormInstance formInstance = _serviceAPI.FormManager.CreateWithoutView(request.ProjectName, request.FormName, request.DocumentId, false, null, false, ResolvePlainParameters(request.FormParameters)).Result;
             return this.SaveForm(formInstance, request.FormFields, request.FormParameters).Result;
         }
 
         public async Task<SaveFormResultModel> SaveForm(FormInstance formInstance, FormFieldsModel fields, Dictionary<string, object> parameters)
+        {
+            return await SaveForm(formInstance, fields, parameters, null);
+        }
+
+        public async Task<SaveFormResultModel> SaveForm(FormInstance formInstance, FormFieldsModel fields, Dictionary<string, object> parameters, FormInstance parentFormInstance)
+        {
+            PrepareForm(formInstance, fields, parameters, parentFormInstance, true);
+            var formSave = formInstance.Save().Result;
+
+            return new() {
+                Status = formSave.Status == FormStatus.Completed ? ResultStatus.Success : ResultStatus.Error,
+                SaveResponse = formSave
+            };
+        }
+
+        public void PrepareForm(FormInstance formInstance, FormFieldsModel fields, Dictionary<string, object> parameters, FormInstance parentFormInstance = null, bool includeRelatedGrids = true)
         {
             FormData formData = new FormData();
 
@@ -48,21 +66,106 @@ namespace Ataven.Managers
             if(fields?.RelatedDocuments != null)
                 SetRelatedDocuments(formInstance, fields.RelatedDocuments);
 
-            if(fields?.RelatedGrids != null)
+            formInstance.MergeData(formData.ControlValues);
+            ApplyParameters(formInstance, parameters, parentFormInstance);
+
+            if(includeRelatedGrids && fields?.RelatedGrids != null)
                 SetRelatedGrids(formInstance, formData, fields.RelatedGrids);
 
             formInstance.MergeData(formData.ControlValues);
-            var formSave = formInstance.Save().Result;
-            
-            if(parameters != null)
-                foreach(KeyValuePair<string, object> p in parameters)
-                    if(!formInstance.Parameters.ContainsKey(p.Key))
-                        formInstance.Parameters.Add(p.Key, p.Value);
-            
-            return new() {
-                Status = formSave.Status == FormStatus.Completed ? ResultStatus.Success : ResultStatus.Error,
-                SaveResponse = formSave
-            };
+        }
+
+        public void AppendRelatedGridRows(FormInstance formInstance, RelatedGridModel relatedGrid)
+        {
+            FormData formData = new FormData();
+            SetRelatedGrids(formInstance, formData, new List<RelatedGridModel> { relatedGrid });
+            formInstance.MergeData(formData.ControlValues);
+        }
+
+        private Dictionary<string, object> ResolvePlainParameters(Dictionary<string, object> parameters)
+        {
+            if (parameters == null)
+                return null;
+
+            Dictionary<string, object> plainParameters = new Dictionary<string, object>();
+            foreach (KeyValuePair<string, object> p in parameters)
+            {
+                if (!IsFormControlParameter(p.Value))
+                    plainParameters[p.Key] = p.Value;
+            }
+
+            return plainParameters;
+        }
+
+        private void ApplyParameters(FormInstance formInstance, Dictionary<string, object> parameters, FormInstance parentFormInstance)
+        {
+            if (parameters == null)
+                return;
+
+            foreach (KeyValuePair<string, object> p in parameters)
+            {
+                object value = ResolveParameterValue(p.Value, formInstance, parentFormInstance);
+                if (formInstance.Parameters.ContainsKey(p.Key))
+                    formInstance.Parameters[p.Key] = value;
+                else
+                    formInstance.Parameters.Add(p.Key, value);
+            }
+        }
+
+        private object ResolveParameterValue(object parameterValue, FormInstance formInstance, FormInstance parentFormInstance)
+        {
+            JObject parameterObject = ToJObject(parameterValue);
+            if (parameterObject == null || !IsFormControlParameter(parameterObject))
+                return parameterValue;
+
+            string controlName = parameterObject.Value<string>("ControlName") ?? parameterObject.Value<string>("controlName");
+            string property = parameterObject.Value<string>("Property") ?? parameterObject.Value<string>("property") ?? "Value";
+            string scope = parameterObject.Value<string>("Scope") ?? parameterObject.Value<string>("scope") ?? "Parent";
+
+            if (string.IsNullOrWhiteSpace(controlName))
+                throw new ArgumentException("FormControl parameter requires ControlName.");
+
+            FormInstance sourceForm = scope.Equals("Current", StringComparison.OrdinalIgnoreCase)
+                ? formInstance
+                : parentFormInstance ?? formInstance;
+
+            try
+            {
+                var control = sourceForm.Controls[controlName];
+                return property.Equals("Text", StringComparison.OrdinalIgnoreCase)
+                    ? control.Text
+                    : control.Value;
+            }
+            catch (Exception ex)
+            {
+                throw new ArgumentException($"FormControl parameter source field '{controlName}' was not found.", ex);
+            }
+        }
+
+        private bool IsFormControlParameter(object parameterValue)
+        {
+            JObject parameterObject = ToJObject(parameterValue);
+            return parameterObject != null && IsFormControlParameter(parameterObject);
+        }
+
+        private bool IsFormControlParameter(JObject parameterObject)
+        {
+            string source = parameterObject.Value<string>("Source") ?? parameterObject.Value<string>("source");
+            return source != null && source.Equals("FormControl", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private JObject ToJObject(object value)
+        {
+            if (value == null)
+                return null;
+            if (value is JObject jObject)
+                return jObject;
+            if (value is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Object)
+                return JObject.Parse(jsonElement.GetRawText());
+            if (value is IDictionary<string, object>)
+                return JObject.FromObject(value);
+
+            return null;
         }
 
         private void SetObjects(FormInstance formInstance, List<ObjectModel> objects)
@@ -173,9 +276,10 @@ namespace Ataven.Managers
                     GridData grid = GridData.FromControl(formInstance.Controls[relatedGrid.FieldName]);
                     foreach(var relatedRow in relatedGrid.Rows) {
                         long relatedDocumentId = relatedRow.RelationDocumentId;
-                        var relatedFormInstance = _serviceAPI.FormManager.CreateWithoutView(relatedGrid.ProjectName, relatedGrid.FormName, relatedDocumentId).Result;
+                        Dictionary<string, object> resolvedRelatedParameters = ResolveParametersAgainstParent(relatedRow.FormParameters, formInstance);
+                        var relatedFormInstance = _serviceAPI.FormManager.CreateWithoutView(relatedGrid.ProjectName, relatedGrid.FormName, relatedDocumentId, false, null, false, resolvedRelatedParameters).Result;
                         if(relatedRow.RelationDocumentId == 0) {
-                            var relatedResult = this.SaveForm(relatedFormInstance, relatedRow.FormFields, relatedRow.FormParameters).Result;
+                            var relatedResult = this.SaveForm(relatedFormInstance, relatedRow.FormFields, relatedRow.FormParameters, formInstance).Result;
 
                             if(relatedResult.SaveResponse.Status != FormStatus.Completed)
                                 throw new FormSaveException(
@@ -221,6 +325,20 @@ namespace Ataven.Managers
                     );
                 }
             }
+        }
+
+        private Dictionary<string, object> ResolveParametersAgainstParent(Dictionary<string, object> parameters, FormInstance parentFormInstance)
+        {
+            if (parameters == null)
+                return null;
+
+            Dictionary<string, object> resolved = new Dictionary<string, object>();
+            foreach (KeyValuePair<string, object> p in parameters)
+                resolved[p.Key] = IsFormControlParameter(p.Value)
+                    ? ResolveParameterValue(p.Value, parentFormInstance, parentFormInstance)
+                    : p.Value;
+
+            return resolved;
         }
     }
 }

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, Form, Tabs, Button, Input, Space, Empty, Typography, Tag, Table, Tooltip, Select, Switch, message } from 'antd';
-import { PlusOutlined, DeleteOutlined, BuildOutlined, PushpinOutlined, TableOutlined, SettingOutlined, InfoCircleFilled } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, BuildOutlined, PushpinOutlined, TableOutlined, SettingOutlined, InfoCircleFilled, FormOutlined } from '@ant-design/icons';
 import { MappingFields } from './mapping/MappingFields';
 import { GridMappingConfig } from './mapping/GridMappingConfig';
 import { MappingConfigModal } from './mapping/MappingConfigModal';
@@ -113,6 +113,10 @@ export const ParametersModal = ({ visible, onCancel, onSave, initialValues, exce
                                 text = 'API Connection';
                             } else if (source === 'Excel') {
                                 text = mapping.valueCol ? `Excel: ${mapping.valueCol}` : 'Excel (Select Column)';
+                            } else if (source === 'FormControl') {
+                                color = 'green';
+                                icon = <FormOutlined />;
+                                text = mapping.controlName ? `Form: ${mapping.controlName}.${mapping.controlProperty || 'Value'}` : 'Form Field';
                             } else {
                                 // Default grid/object summary
                                 color = 'blue';

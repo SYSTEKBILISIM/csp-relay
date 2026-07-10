@@ -289,6 +289,9 @@
 
 .table-container-outer {
     flex: 1;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow: hidden;
     position: relative;
 }
@@ -299,14 +302,26 @@
     left: 0;
     right: 0;
     bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
 }
 
 .scrollable-table-box {
     height: 100%;
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
     overflow: hidden;
     background: #fff;
     border-radius: 15px;
     border: 1px solid #e2e8f0;
+}
+
+.scrollable-table-box .ant-table-wrapper {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
 }
 
 /* Modal Styles */

@@ -54,6 +54,63 @@ namespace Systek_SynergyCSPRelay.Controllers
         }
 
         [HttpPost]
+        [ActionName("BeginFlowSession")]
+        [NoRequestHeaders]
+        [NoResponseHeaders]
+        public Task<IActionResult> BeginFlowSession([FromBody] BeginFlowSessionRequestModel request)
+        {
+            try
+            {
+                var serviceAPI = CreateServiceAPIFromHeaders();
+                var sessionManager = new TransferSessionManager(serviceAPI);
+                var response = sessionManager.BeginFlowSession(request);
+                return Task.FromResult<IActionResult>(Ok(response));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult<IActionResult>(BadRequest(ex));
+            }
+        }
+
+        [HttpPost]
+        [ActionName("AppendRelatedGridRows")]
+        [NoRequestHeaders]
+        [NoResponseHeaders]
+        public Task<IActionResult> AppendRelatedGridRows([FromBody] AppendRelatedGridRowsRequestModel request)
+        {
+            try
+            {
+                var serviceAPI = CreateServiceAPIFromHeaders();
+                var sessionManager = new TransferSessionManager(serviceAPI);
+                var response = sessionManager.AppendRelatedGridRows(request);
+                return Task.FromResult<IActionResult>(Ok(response));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult<IActionResult>(BadRequest(ex));
+            }
+        }
+
+        [HttpPost]
+        [ActionName("FinalizeFlowSession")]
+        [NoRequestHeaders]
+        [NoResponseHeaders]
+        public Task<IActionResult> FinalizeFlowSession([FromBody] FinalizeFlowSessionRequestModel request)
+        {
+            try
+            {
+                var serviceAPI = CreateServiceAPIFromHeaders();
+                var sessionManager = new TransferSessionManager(serviceAPI);
+                var response = sessionManager.FinalizeFlowSession(request);
+                return Task.FromResult<IActionResult>(Ok(response));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult<IActionResult>(BadRequest(ex));
+            }
+        }
+
+        [HttpPost]
         [ActionName("CreateForm")]
         [NoRequestHeaders]
         [NoResponseHeaders]
@@ -157,6 +214,15 @@ namespace Systek_SynergyCSPRelay.Controllers
                     innerMessage = ex.InnerException?.Message
                 }));
             }
+        }
+
+        private Bimser.Synergy.ServiceAPI.ServiceAPI CreateServiceAPIFromHeaders()
+        {
+            var headers = Request.Headers.ToJsonString().ToObject<JObject>();
+            var token = headers["Authorization"][0].ToString().Split(" ")[1];
+            var encryptedData = Request.Headers["bimser-encrypted-data"][0].ToString();
+            var language = Request.Headers["bimser-language"][0].ToString();
+            return ServiceAPIConnector.Create(token, encryptedData, language);
         }
     }
 }

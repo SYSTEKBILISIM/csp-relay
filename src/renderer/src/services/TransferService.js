@@ -1022,6 +1022,43 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             }
         }
 
+        const toFormControlParameter = (mapping = {}, defaultScope = 'Current') => ({
+            Source: 'FormControl',
+            ControlName: mapping.controlName,
+            Property: mapping.controlProperty || 'Value',
+            Scope: mapping.controlScope || defaultScope
+        });
+
+        const resolveParameterDefinitions = async (paramsDef, sourceRow, context, defaultControlScope = 'Current') => {
+            if (!paramsDef || !Array.isArray(paramsDef)) return {};
+
+            const resolved = {};
+            for (const p of paramsDef) {
+                if (!p.key) continue;
+
+                const type = p.type || 'Value';
+                const mapping = p.mapping || {};
+
+                if (mapping.source === 'FormControl') {
+                    resolved[p.key] = toFormControlParameter(mapping, defaultControlScope);
+                    continue;
+                }
+
+                if (type === 'InlineGrid' || type === 'RelatedGrid') {
+                    const masterCol = mapping.masterKey;
+                    resolved[p.key] = masterCol
+                        ? await resolveGridRows(type, mapping, getRowValue(sourceRow, masterCol))
+                        : [];
+                    continue;
+                }
+
+                const res = await resolveMappedValue(mapping, sourceRow, globalStore, apiCache, context, executionLog, warnings, p.key, systemSettings);
+                resolved[p.key] = res.Value !== null ? res.Value : res.Text;
+            }
+
+            return resolved;
+        };
+
         // --- Recursive Helper to resolve grid rows ---
         const resolveGridRows = async (gridType, mapping, masterValue) => {
             const gridSheetName = mapping.gridSheet;
@@ -1052,50 +1089,13 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         const nestedRows = await resolveGridRows(colType, colDef.mapping, gridRow[colDef.mapping?.masterKey]);
 
                         if (colType === 'RelatedGrid') {
-                            const submittedRowRefs = [];
-                            const chunkSize = relatedGridChunkSize;
-                            for (let i = 0; i < nestedRows.length; i += chunkSize) {
-                                const chunk = nestedRows.slice(i, i + chunkSize);
-                                const outcomes = await Promise.allSettled(chunk.map(async (nestedRow) => {
-                                    const relationDocId = await submitRelatedGridRow(
-                                        colDef.mapping?.relatedProjectName,
-                                        colDef.mapping?.relatedFormName,
-                                        nestedRow.FormFields,
-                                        globalStore,
-                                        executionLog,
-                                        loginAsValue
-                                    );
-                                    return { RelationDocumentId: relationDocId };
-                                }));
-
-                                let firstError = null;
-                                const chunkResults = [];
-                                for (const outcome of outcomes) {
-                                    if (outcome.status === 'fulfilled') {
-                                        chunkResults.push(outcome.value);
-                                    } else {
-                                        if (!firstError) firstError = outcome.reason;
-                                    }
-                                }
-
-                                if (firstError) {
-                                    console.error('Failed to submit nested RelatedGrid row:', firstError);
-                                    const customErr = new Error(`Grid mapping '${colDef.name}' row failed: ${firstError.message}`);
-                                    customErr.isValidationError = firstError.isValidationError;
-                                    customErr.rawResponse = firstError.rawResponse;
-                                    throw customErr;
-                                }
-
-                                submittedRowRefs.push(...chunkResults);
-                            }
-
                             rowObjects.push({
                                 FieldName: colDef.name,
                                 Type: 'RelatedGrid',
                                 ProjectName: colDef.mapping?.relatedProjectName,
                                 FormName: colDef.mapping?.relatedFormName,
                                 DocumentIdColumnName: colDef.mapping?.relatedDocIdCol,
-                                Rows: submittedRowRefs
+                                Rows: nestedRows
                             });
                             continue;
                         } else {
@@ -1256,6 +1256,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                 const rowResult = gridType === 'RelatedGrid'
                     ? {
+                        FormParameters: await resolveParameterDefinitions(mapping.formParams, gridRow, rowContext, 'Parent'),
                         FormFields: {
                             Objects: objects,
                             InlineGrids: inlineGrids,
@@ -1272,33 +1273,6 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 resolvedRows.push(rowResult);
             }
             return resolvedRows;
-        };
-
-        // --- Helper to resolve a list of parameters ---
-        const resolveParameters = async (paramsDef) => {
-            if (!paramsDef || !Array.isArray(paramsDef)) return {};
-            const resolved = {};
-            for (const p of paramsDef) {
-                if (p.key) {
-                    const type = p.type || 'Value';
-                    const mapping = p.mapping || {};
-
-                    if (type === 'InlineGrid' || type === 'RelatedGrid') {
-                        const masterCol = mapping.masterKey;
-                        if (masterCol) {
-                            const masterValue = getRowValue(rowData, masterCol);
-                            const resolvedRows = await resolveGridRows(type, mapping, masterValue);
-                            resolved[p.key] = resolvedRows;
-                        } else {
-                            resolved[p.key] = [];
-                        }
-                    } else {
-                        const res = await resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog, warnings, p.key, systemSettings);
-                        resolved[p.key] = res.Value !== null ? res.Value : res.Text;
-                    }
-                }
-            }
-            return resolved;
         };
 
         // --- Dependency Graph based Concurrent Object Resolution ---
@@ -1349,49 +1323,13 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     if (masterCol) {
                         const masterValue = getRowValue(rowData, masterCol);
                         const resolvedRows = await resolveGridRows(type, mapping, masterValue);
-                        const submittedRowRefs = [];
-                        const chunkSize = relatedGridChunkSize;
-                        for (let i = 0; i < resolvedRows.length; i += chunkSize) {
-                            const chunk = resolvedRows.slice(i, i + chunkSize);
-                            const outcomes = await Promise.allSettled(chunk.map(async (rRow) => {
-                                const relationDocId = await submitRelatedGridRow(
-                                    mapping.relatedProjectName,
-                                    mapping.relatedFormName,
-                                    rRow.FormFields,
-                                    globalStore,
-                                    executionLog,
-                                    loginAsValue
-                                );
-                                return { RelationDocumentId: relationDocId };
-                            }));
-
-                            let firstError = null;
-                            const chunkResults = [];
-                            for (const outcome of outcomes) {
-                                if (outcome.status === 'fulfilled') {
-                                    chunkResults.push(outcome.value);
-                                } else {
-                                    if (!firstError) firstError = outcome.reason;
-                                }
-                            }
-
-                            if (firstError) {
-                                console.error('Failed to submit top-level RelatedGrid row:', firstError);
-                                const customErr = new Error(`Grid mapping '${def.name}' row failed: ${firstError.message}`);
-                                customErr.isValidationError = firstError.isValidationError;
-                                customErr.rawResponse = firstError.rawResponse;
-                                throw customErr;
-                            }
-
-                            submittedRowRefs.push(...chunkResults);
-                        }
                         rowObj = {
                             FieldName: def.name,
                             Type: 'RelatedGrid',
                             ProjectName: mapping.relatedProjectName,
                             FormName: mapping.relatedFormName,
                             DocumentIdColumnName: mapping.relatedDocIdCol,
-                            Rows: submittedRowRefs
+                            Rows: resolvedRows
                         };
                     }
                 } else if (type === 'RelatedDocument') {
@@ -1494,8 +1432,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         mappedObjects.push(...allMappedObjects.filter(Boolean));
 
         // Resolve Flow & Form Parameters AFTER objects are resolved (so they can access objectContext)
-        const resolvedFlowParams = await resolveParameters(definitionData.flowParams);
-        const resolvedFormParams = await resolveParameters(definitionData.formParams);
+        const resolvedFlowParams = await resolveParameterDefinitions(definitionData.flowParams, rowData, objectContext, 'Current');
+        const resolvedFormParams = await resolveParameterDefinitions(definitionData.formParams, rowData, objectContext, 'Current');
 
         // 2. Construct Payload
         const transactionType = globalStore.get('transactionType') || 'CreateFlow';
@@ -1533,18 +1471,131 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         if (encryptedData) headers['bimser-encrypted-data'] = encryptedData;
         headers['bimser-language'] = userLang;
 
-        const response = await fetchWithRetry(`${baseUrl}/${endpointStr}`, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(payload)
-        });
+        const postTransferJson = async (endpoint, body, logEntry = null) => {
+            const url = `${baseUrl}/${endpoint}`;
+            const res = await fetchWithRetry(url, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body)
+            });
+
+            const responseBody = res.ok ? await res.json() : await res.text();
+            if (logEntry) {
+                logEntry.raw = {
+                    request: { url, method: 'POST', headers, body },
+                    response: responseBody
+                };
+            }
+
+            if (!res.ok) {
+                const err = new Error(`${endpoint} failed (HTTP ${res.status} ${res.statusText})`);
+                err.rawResponse = responseBody;
+                throw err;
+            }
+
+            return responseBody;
+        };
+
+        const extractRelatedGridJobs = (flowPayload) => {
+            if (transactionType !== 'CreateFlow') return { beginPayload: flowPayload, jobs: [] };
+
+            const beginPayload = _.cloneDeep(flowPayload);
+            const jobs = [];
+
+            (beginPayload.FlowDocuments || []).forEach(doc => {
+                const relatedGrids = doc.FormFields?.RelatedGrids || [];
+                relatedGrids.forEach(grid => {
+                    if (Array.isArray(grid.Rows) && grid.Rows.length > 0) {
+                        jobs.push({
+                            documentName: doc.DocumentName,
+                            relatedGrid: _.cloneDeep(grid)
+                        });
+                    }
+                });
+                doc.FormFields.RelatedGrids = [];
+            });
+
+            return { beginPayload, jobs };
+        };
 
         let status = 'Error';
-        let msg = `HTTP ${response.status} ${response.statusText}`;
+        let msg = '';
         let fullApiResponse = null;
+        let responseOk = false;
+        let responseStatus = 0;
+        let responseStatusText = '';
+        const sessionDiagnostics = [];
 
-        if (response.ok) {
-            fullApiResponse = await response.json();
+        const { beginPayload, jobs: relatedGridJobs } = extractRelatedGridJobs(payload);
+
+        if (transactionType === 'CreateFlow' && relatedGridJobs.length > 0) {
+            execLog.details = `Session transfer: ${relatedGridJobs.length} RelatedGrid field(s)`;
+
+            const beginLog = { key: `flow_session_begin_${Date.now()}_${Math.random()}`, step: 'BeginFlowSession', details: `Endpoint: BeginFlowSession`, status: 'Pending' };
+            executionLog.push(beginLog);
+            const beginResponse = await postTransferJson('BeginFlowSession', beginPayload, beginLog);
+            beginLog.status = 'Success';
+            sessionDiagnostics.push({ step: 'BeginFlowSession', response: beginResponse });
+
+            const sessionId = beginResponse.sessionId || beginResponse.SessionId;
+            if (!sessionId) throw new Error('BeginFlowSession response did not include sessionId.');
+
+            for (const job of relatedGridJobs) {
+                const rows = job.relatedGrid.Rows || [];
+                for (let i = 0; i < rows.length; i += relatedGridChunkSize) {
+                    const chunkRows = rows.slice(i, i + relatedGridChunkSize);
+                    const appendBody = {
+                        SessionId: sessionId,
+                        DocumentName: job.documentName,
+                        RelatedGrid: {
+                            ...job.relatedGrid,
+                            Rows: chunkRows
+                        }
+                    };
+                    const appendLog = {
+                        key: `flow_session_append_${Date.now()}_${Math.random()}`,
+                        step: 'AppendRelatedGridRows',
+                        details: `${job.relatedGrid.FieldName}: rows ${i + 1}-${i + chunkRows.length}/${rows.length}`,
+                        status: 'Pending'
+                    };
+                    executionLog.push(appendLog);
+                    const appendResponse = await postTransferJson('AppendRelatedGridRows', appendBody, appendLog);
+                    appendLog.status = 'Success';
+                    sessionDiagnostics.push({ step: 'AppendRelatedGridRows', fieldName: job.relatedGrid.FieldName, rowCount: chunkRows.length, response: appendResponse });
+                }
+            }
+
+            const finalizeBody = { SessionId: sessionId };
+            const finalizeLog = { key: `flow_session_finalize_${Date.now()}_${Math.random()}`, step: 'FinalizeFlowSession', details: `Endpoint: FinalizeFlowSession`, status: 'Pending' };
+            executionLog.push(finalizeLog);
+            fullApiResponse = await postTransferJson('FinalizeFlowSession', finalizeBody, finalizeLog);
+            finalizeLog.status = 'Success';
+            sessionDiagnostics.push({ step: 'FinalizeFlowSession', response: fullApiResponse });
+
+            responseOk = true;
+            responseStatus = 200;
+            responseStatusText = 'OK';
+        } else {
+            const response = await fetchWithRetry(`${baseUrl}/${endpointStr}`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(payload)
+            });
+
+            responseOk = response.ok;
+            responseStatus = response.status;
+            responseStatusText = response.statusText;
+
+            if (response.ok) {
+                fullApiResponse = await response.json();
+            } else {
+                fullApiResponse = await response.text();
+            }
+        }
+
+        msg = `HTTP ${responseStatus} ${responseStatusText}`;
+
+        if (responseOk) {
 
             // Check for CSP Validation Errors (Even if HTTP 200)
             let hasValidationErrors = false;
@@ -1589,9 +1640,6 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 else msg = 'Flow Created';
             }
         } else {
-            const errorText = await response.text();
-            fullApiResponse = errorText;
-            msg = `HTTP ${response.status} ${response.statusText}`;
             execLog.status = 'Error';
             execLog.details += ' - HTTP Failed';
         }
@@ -1602,7 +1650,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 url: `${baseUrl}/${endpointStr}`,
                 method: 'POST',
                 headers,
-                body: payload
+                body: transactionType === 'CreateFlow' && relatedGridJobs.length > 0 ? beginPayload : payload,
+                sessionDiagnostics
             },
             response: fullApiResponse
         };
