@@ -58,6 +58,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
 
     const [mainSheet, setMainSheet] = useState(null);
     const [mainIdColumn, setMainIdColumn] = useState(null);
+    const [documentIdColumn, setDocumentIdColumn] = useState(null);
+    const [localPathColumn, setLocalPathColumn] = useState(null);
+    const [cspPathColumn, setCspPathColumn] = useState(null);
+    const isDocumentTransfer = globalStore.get('transactionType') === 'DocumentTransfer';
     // const [objects, setObjects] = useState([]); // REMOVED
 
     // Parameters State
@@ -145,6 +149,18 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                 setMainIdColumn(restoreData.mainIdColumn);
                 form.setFieldsValue({ mainIdColumn: restoreData.mainIdColumn });
             }
+            if (restoreData.documentIdColumn) {
+                setDocumentIdColumn(restoreData.documentIdColumn);
+                form.setFieldsValue({ documentIdColumn: restoreData.documentIdColumn });
+            }
+            if (restoreData.localPathColumn) {
+                setLocalPathColumn(restoreData.localPathColumn);
+                form.setFieldsValue({ localPathColumn: restoreData.localPathColumn });
+            }
+            if (restoreData.cspPathColumn) {
+                setCspPathColumn(restoreData.cspPathColumn);
+                form.setFieldsValue({ cspPathColumn: restoreData.cspPathColumn });
+            }
             if (restoreData.objects) {
                 setObjects(restoreData.objects);
             }
@@ -182,6 +198,9 @@ export const TransferScreen = ({ onFinish, initialData }) => {
             const tempConfig = {
                 mainSheet,
                 mainIdColumn,
+                documentIdColumn,
+                localPathColumn,
+                cspPathColumn,
                 objects,
                 flowParams,
                 formParams,
@@ -196,6 +215,9 @@ export const TransferScreen = ({ onFinish, initialData }) => {
     }, [
         mainSheet,
         mainIdColumn,
+        documentIdColumn,
+        localPathColumn,
+        cspPathColumn,
         objects,
         flowParams,
         formParams,
@@ -210,13 +232,16 @@ export const TransferScreen = ({ onFinish, initialData }) => {
 
     // Export Configuration
     const handleExport = () => {
-        if (objects.length === 0 && flowParams.length === 0 && formParams.length === 0) {
+        if (!isDocumentTransfer && objects.length === 0 && flowParams.length === 0 && formParams.length === 0) {
             messageApi.warning('Nothing to export (No objects or parameters).');
             return;
         }
         const data = {
             mainSheet,
             mainIdColumn,
+            documentIdColumn,
+            localPathColumn,
+            cspPathColumn,
             objects,
             flowParams,
             formParams,
@@ -263,6 +288,19 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                 if (data.mainIdColumn) {
                     setMainIdColumn(data.mainIdColumn);
                     form.setFieldsValue({ mainIdColumn: data.mainIdColumn });
+                }
+
+                if (data.documentIdColumn) {
+                    setDocumentIdColumn(data.documentIdColumn);
+                    form.setFieldsValue({ documentIdColumn: data.documentIdColumn });
+                }
+                if (data.localPathColumn) {
+                    setLocalPathColumn(data.localPathColumn);
+                    form.setFieldsValue({ localPathColumn: data.localPathColumn });
+                }
+                if (data.cspPathColumn) {
+                    setCspPathColumn(data.cspPathColumn);
+                    form.setFieldsValue({ cspPathColumn: data.cspPathColumn });
                 }
 
                 // Restore Parameters
@@ -318,7 +356,8 @@ export const TransferScreen = ({ onFinish, initialData }) => {
             gridColumns: [],
             relatedProjectName: '',
             relatedFormName: '',
-            relatedDocIdCol: 'RELATIONDOCUMENTID'
+            relatedDocIdCol: 'RELATIONDOCUMENTID',
+            gridWriteMode: 'Append'
         };
         setValueSource(mapping.source || 'Excel');
         setCurrentObjectMapping({
@@ -480,6 +519,9 @@ export const TransferScreen = ({ onFinish, initialData }) => {
         // Save to store
         globalStore.set('mappingMainSheet', mainSheet);
         globalStore.set('mappingMainIdColumn', mainIdColumn);
+        globalStore.set('mappingDocumentIdColumn', documentIdColumn);
+        globalStore.set('mappingLocalPathColumn', localPathColumn);
+        globalStore.set('mappingCspPathColumn', cspPathColumn);
         globalStore.set('mappingObjects', objects);
         globalStore.set('flowParams', flowParams);
         globalStore.set('formParams', formParams);
@@ -491,7 +533,7 @@ export const TransferScreen = ({ onFinish, initialData }) => {
 
         setTimeout(() => {
             setLoading(false);
-            if (onFinish) onFinish({ ...values, objects, mainSheet, mainIdColumn, flowParams, formParams, loginAsEnabled, loginAsColumn, apiMatchThreshold, apiCacheLimit, relatedGridChunkSize });
+            if (onFinish) onFinish({ ...values, objects, mainSheet, mainIdColumn, documentIdColumn, localPathColumn, cspPathColumn, flowParams, formParams, loginAsEnabled, loginAsColumn, apiMatchThreshold, apiCacheLimit, relatedGridChunkSize });
         }, 1000);
     };
 
@@ -512,9 +554,9 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                 <div className="transfer-header">
                     <div className="transfer-title-box">
                         <Title level={3}>
-                            Transfer Definition
+                            {isDocumentTransfer ? 'Document Transfer Definition' : 'Transfer Definition'}
                         </Title>
-                        <Text type="secondary">Define mapping rules</Text>
+                        <Text type="secondary">{isDocumentTransfer ? 'Select local and CSP document path columns' : 'Define mapping rules'}</Text>
                     </div>
                     <Space>
                         {/* Parameters button removed from here */}
@@ -538,10 +580,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                     initialValues={{}}
                     className="transfer-form"
                 >
-                    <div className="transfer-form-inner">
+                    <div className={`transfer-form-inner ${isDocumentTransfer ? 'document-transfer-layout' : ''}`}>
                         {/* Top Controls Row */}
-                        <div className="top-controls-row">
-                            <div className="top-controls-selectors">
+                        <div className={`top-controls-row ${isDocumentTransfer ? 'document-base-controls' : ''}`}>
+                            <div className={`top-controls-selectors ${isDocumentTransfer ? 'document-base-selectors' : ''}`}>
                                 <Form.Item
                                     name="mainSheet"
                                     label={<span className="form-item-label-bold">Main Sheet</span>}
@@ -553,7 +595,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                         onChange={(val) => {
                                             setMainSheet(val);
                                             setMainIdColumn(null);
-                                            form.setFieldsValue({ mainIdColumn: null });
+                                            setDocumentIdColumn(null);
+                                            setLocalPathColumn(null);
+                                            setCspPathColumn(null);
+                                            form.setFieldsValue({ mainIdColumn: null, documentIdColumn: null, localPathColumn: null, cspPathColumn: null });
                                         }}
                                         options={sheets.map(s => ({ label: s, value: s }))}
                                     />
@@ -572,9 +617,26 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                         showSearch
                                     />
                                 </Form.Item>
+
+                                {globalStore.get('transactionType') === 'EditForm' && (
+                                    <Form.Item
+                                        name="documentIdColumn"
+                                        label={<span className="form-item-label-bold">Document ID Column</span>}
+                                        rules={[{ required: true, message: 'Please select Document ID Column' }]}
+                                        style={{ marginBottom: 0, flex: 1 }}
+                                        tooltip="Excel column containing the CSP form DocumentId to update"
+                                    >
+                                        <Select
+                                            placeholder="Select DocumentId Column"
+                                            onChange={setDocumentIdColumn}
+                                            options={currentColumns.map(c => ({ label: c, value: c }))}
+                                            showSearch
+                                        />
+                                    </Form.Item>
+                                )}
                             </div>
 
-                            <Space align="end" size={16}>
+                            {!isDocumentTransfer && <Space align="end" size={16} className="top-controls-actions">
                                 <Tooltip title="Settings & Parameters">
                                     <Button
                                         icon={<SettingOutlined />}
@@ -594,10 +656,67 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                     onChange={e => setSearchQuery(e.target.value)}
                                     style={{ width: 220, borderRadius: 8 }}
                                 />
-                            </Space>
+                            </Space>}
                         </div>
 
+                        {isDocumentTransfer && (
+                            <div className="document-path-panel">
+                                <div className="document-path-panel-header">
+                                    <Text className="document-path-panel-title">Document Path Mapping</Text>
+                                    <Text type="secondary">Choose the Excel columns that tell Relay where the file is and where CSP should store it.</Text>
+                                </div>
+                                <div className="document-path-grid">
+                                    <div className="document-path-card local-path-card">
+                                        <div className="document-path-card-eyebrow">LOCAL SOURCE</div>
+                                        <Form.Item
+                                            name="localPathColumn"
+                                            label={<span className="form-item-label-bold">Local Path Column</span>}
+                                            rules={[{ required: true, message: 'Please select Local Path Column' }]}
+                                            style={{ marginBottom: 0, flex: 1 }}
+                                            tooltip="Excel column containing the full local file path"
+                                        >
+                                            <Select
+                                                placeholder="Select Local Path Column"
+                                                onChange={setLocalPathColumn}
+                                                options={currentColumns.map(c => ({ label: c, value: c }))}
+                                                showSearch
+                                            />
+                                        </Form.Item>
+                                        <Text type="secondary">Full local file path from the uploaded Excel row.</Text>
+                                    </div>
+
+                                    <div className="document-path-connector" aria-hidden="true">
+                                        <span className="document-path-connector-line" />
+                                        <span className="document-path-connector-icon">
+                                            <ArrowRightOutlined />
+                                        </span>
+                                        <span className="document-path-connector-line" />
+                                    </div>
+
+                                    <div className="document-path-card csp-path-card">
+                                        <div className="document-path-card-eyebrow">CSP DOCUMENT MANAGEMENT</div>
+                                        <Form.Item
+                                            name="cspPathColumn"
+                                            label={<span className="form-item-label-bold">CSP Target Path Column</span>}
+                                            rules={[{ required: true, message: 'Please select CSP Target Path Column' }]}
+                                            style={{ marginBottom: 0 }}
+                                            tooltip="Excel column containing the target Document Management folder path"
+                                        >
+                                            <Select
+                                                placeholder="Select CSP Path Column"
+                                                onChange={setCspPathColumn}
+                                                options={currentColumns.map(c => ({ label: c, value: c }))}
+                                                showSearch
+                                            />
+                                        </Form.Item>
+                                        <Text type="secondary">Target folder path in CSP. Missing folders are created automatically.</Text>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
                         {/* Objects Mapping Table - Scrollable Body */}
+                        {!isDocumentTransfer && (
                         <div ref={tableContainerRef} className={`mapping-table-card ${objects.length === 0 ? 'empty-state' : ''}`}>
                             <Table
                                 components={{ header: { cell: ResizableTitle } }}
@@ -683,11 +802,14 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                 </div>
                             )}
                         </div>
+                        )}
 
                         {/* Footer / Submit */}
-                        <Button type="primary" htmlType="submit" block loading={loading} className="submit-btn-large">
-                            Review & Transfer
-                        </Button>
+                        <div className={isDocumentTransfer ? 'document-submit-area' : ''}>
+                            <Button type="primary" htmlType="submit" block loading={loading} className="submit-btn-large">
+                                Review & Transfer
+                            </Button>
+                        </div>
                     </div>
                 </Form>
 

@@ -212,6 +212,9 @@ namespace Ataven.Managers
                 try {
                     GridData grid = GridData.FromControl(formInstance.Controls[inline.FieldName]);
 
+                    if (IsOverwriteMode(inline.WriteMode))
+                        grid.Rows.Clear();
+
                     foreach(var row in inline.Rows) {
                         GridDataRow newRow = new GridDataRow();
                         foreach(var obj in row.Objects) {
@@ -274,6 +277,9 @@ namespace Ataven.Managers
             foreach(var relatedGrid in relatedGrids) {
                 try {
                     GridData grid = GridData.FromControl(formInstance.Controls[relatedGrid.FieldName]);
+                    if (IsOverwriteMode(relatedGrid.WriteMode))
+                        grid.Rows.Clear();
+
                     foreach(var relatedRow in relatedGrid.Rows) {
                         long relatedDocumentId = relatedRow.RelationDocumentId;
                         Dictionary<string, object> resolvedRelatedParameters = ResolveParametersAgainstParent(relatedRow.FormParameters, formInstance);
@@ -325,6 +331,11 @@ namespace Ataven.Managers
                     );
                 }
             }
+        }
+
+        private bool IsOverwriteMode(string writeMode)
+        {
+            return string.Equals(writeMode, "Overwrite", StringComparison.OrdinalIgnoreCase);
         }
 
         private Dictionary<string, object> ResolveParametersAgainstParent(Dictionary<string, object> parameters, FormInstance parentFormInstance)

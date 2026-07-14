@@ -23,11 +23,12 @@ namespace Ataven.Managers
         public Task<GetDMObjectResponse> CreateFile(CreateFileRequestModel request)
         {
             DocumentManagementHelper documentManagementHelper = _serviceAPI.GetHelperInstance<DocumentManagementHelper>();
+            string targetPath = EnsureFolderPath(documentManagementHelper, request.Path);
             var createFileResult = documentManagementHelper.CreateFile(
                 request.Name,
                 request.Description ?? string.Empty,
                 request.GetByteData(),
-                request.Path,
+                targetPath,
                 request.ContentType
             ).Result;
             return Task.FromResult(createFileResult.Response);
@@ -36,14 +37,28 @@ namespace Ataven.Managers
         public Task<CreateFilePartsResponse> CreateFileParts(CreateFilePartsRequestModel request)
         {
             DocumentManagementHelper documentManagementHelper = _serviceAPI.GetHelperInstance<DocumentManagementHelper>();
+            string targetPath = EnsureFolderPath(documentManagementHelper, request.Path);
             var createFileResult = documentManagementHelper.CreateFileParts(
                 request.Name,
                 request.Description ?? string.Empty,
                 request.DataLength,
-                request.Path,
+                targetPath,
                 request.ContentType
             ).Result;
             return Task.FromResult(createFileResult.Response);
+        }
+
+        private static string EnsureFolderPath(DocumentManagementHelper documentManagementHelper, string path)
+        {
+            string normalizedPath = (path ?? string.Empty).Replace("\\", "/").Trim().Trim('/');
+            if (string.IsNullOrWhiteSpace(normalizedPath))
+                throw new ArgumentException("Document target path cannot be empty.");
+
+            var createTreeResult = documentManagementHelper.CreateFolderTree(normalizedPath).Result;
+            if (!createTreeResult.Success)
+                throw new InvalidOperationException($"Document target path '{normalizedPath}' could not be created.", createTreeResult.Exception);
+
+            return normalizedPath;
         }
 
         public Task<bool> UploadFileParts(UploadFilePartsRequestModel request)

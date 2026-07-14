@@ -182,6 +182,23 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                         </Form.Item>
                     </Col>
                 </Row>
+                <div style={{ marginTop: 20, paddingTop: 20, borderTop: '1px solid #e2e8f0' }}>
+                    <Form.Item
+                        name="gridWriteMode"
+                        label={<Text strong style={{ fontSize: 13 }}>When the Target Grid Already Has Rows</Text>}
+                        initialValue="Append"
+                        tooltip={{ title: 'Controls whether existing DataGrid rows are kept or removed before importing the mapped rows.' }}
+                        style={{ marginBottom: 0 }}
+                    >
+                        <Select
+                            variant="filled"
+                            options={[
+                                { label: 'Keep existing rows and append new rows', value: 'Append' },
+                                { label: 'Replace existing rows with imported rows', value: 'Overwrite' }
+                            ]}
+                        />
+                    </Form.Item>
+                </div>
             </div>
 
             {/* RELATED GRID SPECIFIC SETTINGS */}
