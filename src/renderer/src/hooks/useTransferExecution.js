@@ -6,6 +6,7 @@ import { logDB } from '../services/IndexedDBService';
 
 const MAX_DETAIL_LOGS = 500;
 const DEFAULT_WORK_UNITS = 1;
+const PARALLEL_ROW_LIMIT = 4;
 
 // Reusable hook for transfer logic
 const cleanJson = (data) => {
@@ -49,6 +50,13 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     });
     const [logs, setLogs] = useState([]);
     const [estimatedTime, setEstimatedTime] = useState(null);
+    const [executionMode, setExecutionMode] = useState('sequential');
+    const [executionTiming, setExecutionTiming] = useState({
+        startedAt: null,
+        endedAt: null,
+        elapsedMs: 0
+    });
+    const executionTimingRef = useRef({ startedAt: null, endedAt: null });
     const [isComplete, setIsComplete] = useState(false);
     const [excelData, setExcelData] = useState([]);
 
@@ -101,6 +109,21 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     const wasRetryContextRef = useRef(false); // Persists retry context across pause/resume
     const [isRetryMode, setIsRetryMode] = useState(false); // For UI context-aware labels
 
+    useEffect(() => {
+        if (!loading || !executionTimingRef.current.startedAt) return undefined;
+
+        const updateElapsed = () => {
+            setExecutionTiming(prev => ({
+                ...prev,
+                elapsedMs: Date.now() - executionTimingRef.current.startedAt
+            }));
+        };
+
+        updateElapsed();
+        const timer = setInterval(updateElapsed, 1000);
+        return () => clearInterval(timer);
+    }, [loading]);
+
 
     // Initialize Data and Populate Queue table
     useEffect(() => {
@@ -142,7 +165,9 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             setIsPausing(true);
             isPausingRef.current = true;
             isRunning.current = false;
-            message.info('Pausing transfer... waiting for current row.');
+            message.info(executionMode === 'parallel'
+                ? 'Pausing transfer... waiting for active rows.'
+                : 'Pausing transfer... waiting for current row.');
         }
     };
 
@@ -151,9 +176,18 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             setIsStopping(true);
             isStoppingRef.current = true;
             isRunning.current = false;
-            message.info('Stopping transfer... waiting for current row.');
+            message.info(executionMode === 'parallel'
+                ? 'Stopping transfer... waiting for active rows.'
+                : 'Stopping transfer... waiting for current row.');
         } else if (isPaused || isPausedRef.current) {
             // If already paused, we can stop immediately as nothing is running
+            const endedAt = Date.now();
+            executionTimingRef.current.endedAt = endedAt;
+            setExecutionTiming(prev => ({
+                ...prev,
+                endedAt,
+                elapsedMs: prev.startedAt ? endedAt - prev.startedAt : 0
+            }));
             setIsPaused(false);
             isPausedRef.current = false;
             setLoading(false);
@@ -212,17 +246,29 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     };
 
     const startTransfer = async (isRetryContext = false) => {
+        const isResuming = isPausedRef.current || isPaused;
         wasRetryContextRef.current = isRetryContext;
         setIsRetryMode(isRetryContext);
-        const pendingRows = logsStateRef.current.filter(l => {
-            if (!selectedRowKeysRef.current.includes(l.key)) return false;
-            if (isRetryContext) return l.status === 'Error' || l.status === 'ValidationError';
-            return l.status === 'Pending';
+
+        const pendingRows = logsStateRef.current.filter(log => {
+            if (!selectedRowKeysRef.current.includes(log.key)) return false;
+            if (isRetryContext) return log.status === 'Error' || log.status === 'ValidationError';
+            return log.status === 'Pending';
         });
 
         if (pendingRows.length === 0) {
             message.warning('No entries match execution criteria.');
             return;
+        }
+
+        if (!isResuming) {
+            const startedAt = Date.now();
+            executionTimingRef.current = { startedAt, endedAt: null };
+            setExecutionTiming({ startedAt, endedAt: null, elapsedMs: 0 });
+            apiCache.current = new Map();
+        } else {
+            executionTimingRef.current.endedAt = null;
+            setExecutionTiming(prev => ({ ...prev, endedAt: null }));
         }
 
         setLoading(true);
@@ -234,76 +280,59 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setIsPausing(false);
         isPausingRef.current = false;
 
-        if (!isPaused) {
-            // ALWAYS clear cache when starting fresh or retrying
-            apiCache.current = new Map();
-        }
-        
-        if (!isPaused && !isRetryContext) {
+        if (!isResuming && !isRetryContext) {
             updateRetryState({ isRetrying: false, total: 0, processed: 0 });
         }
         setIsPaused(false);
         isPausedRef.current = false;
 
-        let sessionProcessedCount = 0; // Local counter for estimated time of current session
+        let sessionProcessedCount = 0;
         let sessionDurationAccumulator = 0;
         let sessionWorkUnitsAccumulator = 0;
+        const rowConcurrency = executionMode === 'parallel'
+            ? Math.min(PARALLEL_ROW_LIMIT, pendingRows.length)
+            : 1;
 
         const updateEstimatedTimeFromWork = () => {
-            const avgMillisPerWorkUnit = sessionDurationAccumulator / Math.max(sessionWorkUnitsAccumulator, DEFAULT_WORK_UNITS);
-            const avgWorkUnitsPerRow = sessionWorkUnitsAccumulator / Math.max(sessionProcessedCount, 1);
-            const remainingWorkUnits = pendingRows
-                .slice(sessionProcessedCount)
-                .reduce((total, log) => total + (Number.isFinite(log.workUnits) && log.workUnits > 0 ? log.workUnits : avgWorkUnitsPerRow), 0);
-            const estSecs = (avgMillisPerWorkUnit * remainingWorkUnits) / 1000;
+            if (sessionProcessedCount === 0) return;
 
-            if (remainingWorkUnits > 0) {
-                const m = Math.floor(estSecs / 60);
-                const s = Math.round(estSecs % 60);
-                setEstimatedTime(m > 0 ? `${m}m ${s}s` : `${s}s`);
+            const avgMillisPerWorkUnit = sessionDurationAccumulator / Math.max(sessionWorkUnitsAccumulator, DEFAULT_WORK_UNITS);
+            const avgWorkUnitsPerRow = sessionWorkUnitsAccumulator / sessionProcessedCount;
+            const remainingRows = Math.max(pendingRows.length - sessionProcessedCount, 0);
+            const remainingWorkUnits = remainingRows * avgWorkUnitsPerRow;
+            const estSecs = (avgMillisPerWorkUnit * remainingWorkUnits) / (1000 * rowConcurrency);
+
+            if (remainingRows > 0) {
+                const minutes = Math.floor(estSecs / 60);
+                const seconds = Math.round(estSecs % 60);
+                setEstimatedTime(minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`);
             } else {
                 setEstimatedTime('0s');
             }
         };
 
-        // Sync initial stats
-        syncGlobalStats();
-
-        for (let i = 0; i < logsStateRef.current.length; i++) {
-            if (!isRunning.current) break;
-
-            const currentLog = logsStateRef.current[i];
-            const isRetryTarget = isRetryContext && (currentLog.status === 'Error' || currentLog.status === 'ValidationError');
-
-            if (!selectedRowKeysRef.current.includes(currentLog.key) || (currentLog.status !== 'Pending' && !isRetryTarget)) {
-                continue;
+        const refreshExecutionState = (force = false) => {
+            if (force || isRetryContext || Date.now() - lastUpdate.current > 250) {
+                setLogs([...logsStateRef.current]);
+                lastUpdate.current = Date.now();
+                syncGlobalStats();
             }
+        };
+
+        const processLogEntry = async currentLog => {
+            const activeLog = logsStateRef.current.find(log => log.key === currentLog.key);
+            if (!activeLog) return;
 
             const rowData = allSheetsData.current[definitionData.mainSheet][currentLog.key];
             const iterStart = Date.now();
-            let duration = 0;
-
-            const activeLog = logsStateRef.current[i];
             activeLog.status = 'Processing';
             activeLog.message = 'Resolving fields and executing flow...';
-
-            setLogs([...logsStateRef.current]);
-            lastUpdate.current = Date.now();
+            refreshExecutionState(true);
 
             try {
                 const result = await processRowAndExecute(rowData, definitionData, globalStore, apiCache.current, allSheetsData.current);
-                duration = Date.now() - iterStart;
-                sessionDurationAccumulator += duration;
-
-                sessionProcessedCount++;
+                const duration = Date.now() - iterStart;
                 activeLog.workUnits = getExecutionWorkUnits(result.executionLog);
-                sessionWorkUnitsAccumulator += activeLog.workUnits;
-
-                if (isRetryContext) {
-                    updateRetryState({ processed: retryStateRef.current.processed + 1 });
-                    setStats(prev => ({ ...prev, retried: prev.retried + 1 }));
-                    selectedRowKeysRef.current = selectedRowKeysRef.current.filter(k => k !== currentLog.key);
-                }
 
                 const detailObj = {
                     payload: result.payload,
@@ -321,27 +350,23 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 try {
                     await logDB.saveDetail(currentLog.key, detailObj);
                 } catch (e) {
-                    console.error("IndexedDB Save Error:", e);
+                    console.error('IndexedDB Save Error:', e);
                 }
 
                 activeLog.status = result.status;
                 activeLog.message = result.message;
                 activeLog.duration = `${duration}ms`;
                 activeLog.timestamp = new Date().toLocaleString();
-
+                sessionDurationAccumulator += duration;
+                sessionWorkUnitsAccumulator += activeLog.workUnits;
             } catch (err) {
                 console.error(err);
-                duration = Date.now() - iterStart;
-                sessionDurationAccumulator += duration;
-
+                const duration = Date.now() - iterStart;
                 const errMsg = err.message || 'Unknown Error';
                 const isValidation = err.isValidationError === true;
-                const failedPayloadData = err.failedPayload ? JSON.stringify(err.failedPayload, null, 2) : 'Error constructing payload or executing flow';
-                const errorResponse = err.rawResponse || errMsg;
-
                 const detailObj = {
-                    payload: failedPayloadData,
-                    response: cleanJson(errorResponse),
+                    payload: err.failedPayload ? JSON.stringify(err.failedPayload, null, 2) : 'Error constructing payload or executing flow',
+                    response: cleanJson(err.rawResponse || errMsg),
                     executionLog: [],
                     warnings: []
                 };
@@ -349,46 +374,56 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 try {
                     await logDB.saveDetail(currentLog.key, detailObj);
                 } catch (e) {
-                    console.error("IndexedDB Save Error:", e);
+                    console.error('IndexedDB Save Error:', e);
                 }
 
                 activeLog.status = isValidation ? 'ValidationError' : 'Error';
                 activeLog.message = errMsg;
                 activeLog.duration = `${duration}ms`;
                 activeLog.timestamp = new Date().toLocaleString();
-
-                sessionProcessedCount++;
                 activeLog.workUnits = getExecutionWorkUnits(detailObj.executionLog);
+                sessionDurationAccumulator += duration;
                 sessionWorkUnitsAccumulator += activeLog.workUnits;
-
-                if (isRetryContext) {
-                    updateRetryState({ processed: retryStateRef.current.processed + 1 });
-                    setStats(prev => ({ ...prev, retried: prev.retried + 1 }));
-                }
             }
 
-            // Sync UI and Global Stats
-            if (isRetryContext || Date.now() - lastUpdate.current > 1000) {
-                setLogs([...logsStateRef.current]);
-                lastUpdate.current = Date.now();
-                syncGlobalStats();
+            sessionProcessedCount += 1;
+            if (isRetryContext) {
+                updateRetryState({ processed: retryStateRef.current.processed + 1 });
+                setStats(prev => ({ ...prev, retried: prev.retried + 1 }));
+                selectedRowKeysRef.current = selectedRowKeysRef.current.filter(key => key !== currentLog.key);
             }
 
-            // Update estimated time using operation/request weight, not only row count.
             updateEstimatedTimeFromWork();
+            refreshExecutionState();
+        };
 
-            await new Promise(resolve => setTimeout(resolve, 10));
+        syncGlobalStats();
+
+        if (rowConcurrency === 1) {
+            for (const currentLog of pendingRows) {
+                if (!isRunning.current) break;
+                await processLogEntry(currentLog);
+                await new Promise(resolve => setTimeout(resolve, 10));
+            }
+        } else {
+            let nextRowIndex = 0;
+            const worker = async () => {
+                while (isRunning.current) {
+                    const currentIndex = nextRowIndex;
+                    nextRowIndex += 1;
+                    if (currentIndex >= pendingRows.length) return;
+                    await processLogEntry(pendingRows[currentIndex]);
+                }
+            };
+            await Promise.all(Array.from({ length: rowConcurrency }, () => worker()));
         }
 
-        // Finalization
-        setLogs([...logsStateRef.current]);
-        syncGlobalStats();
+        refreshExecutionState(true);
         setLoading(false);
         if (onStatusChange) onStatusChange(false);
 
         const wasStopped = isStoppingRef.current;
         const wasPaused = isPausingRef.current;
-
         setIsStopping(false);
         isStoppingRef.current = false;
         setIsPausing(false);
@@ -400,6 +435,13 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             isPausedRef.current = true;
             message.success('Transfer paused successfully.');
         } else {
+            const endedAt = Date.now();
+            executionTimingRef.current.endedAt = endedAt;
+            setExecutionTiming(prev => ({
+                ...prev,
+                endedAt,
+                elapsedMs: prev.startedAt ? endedAt - prev.startedAt : 0
+            }));
             setIsComplete(true);
             if (wasStopped) {
                 message.warning('Transfer completely stopped.');
@@ -407,7 +449,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 message.success('Transfer process completed successfully.');
             }
 
-            if (isRetryMode) {
+            if (isRetryContext) {
                 updateRetryState({ isRetrying: false });
                 setIsRetryMode(false);
                 wasRetryContextRef.current = false;
@@ -441,6 +483,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setStats({ total: resetLogs.length, processed: 0, success: 0, error: 0 });
         setProgress(0);
         setEstimatedTime(null);
+        executionTimingRef.current = { startedAt: null, endedAt: null };
+        setExecutionTiming({ startedAt: null, endedAt: null, elapsedMs: 0 });
         setIsComplete(false);
         isRunning.current = false;
         setLoading(false);
@@ -483,6 +527,9 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         stats,
         logs,
         estimatedTime,
+        executionMode,
+        setExecutionMode,
+        executionTiming,
         isComplete,
         excelData,
         isPaused,

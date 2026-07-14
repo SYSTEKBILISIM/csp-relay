@@ -157,7 +157,10 @@ namespace Ataven.Helpers.ServiceAPIHelpers
         {
             return await ExecuteWithHandlingAsync(async () =>
             {
-                var treePaths = folderPath.Split("/");
+                var normalizedPath = (folderPath ?? string.Empty).Replace("\\", "/").Trim().Trim('/');
+                var treePaths = normalizedPath.Split(new[] { '/' }, StringSplitOptions.RemoveEmptyEntries);
+                if (treePaths.Length == 0)
+                    throw new ArgumentException("Folder path cannot be empty.");
                 var treeList = BuildPathHierarchy(treePaths);
                 var existingFoldersResponse = await ServiceAPI.DocumentManagement.GetDMObjectsFromPaths(new GetDMObjectsFromPathsRequest(treeList));
                 var existingItems = existingFoldersResponse.Result.Items;

@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist_/
 out/
 .DS_Store
 *.log
@@ -16,4 +17,3 @@ yarn-error.log*
 
 # Vite temporary configs
 electron.vite.config.*.mjs
-

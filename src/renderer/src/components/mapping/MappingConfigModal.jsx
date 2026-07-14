@@ -29,6 +29,7 @@ export const MappingConfigModal = ({
             if (initialValues && Object.keys(initialValues).length > 0 && initialValues.source) {
                 form.setFieldsValue({
                     isArray: false,
+                    gridWriteMode: 'Append',
                     ...initialValues
                 });
             } else {
@@ -41,6 +42,7 @@ export const MappingConfigModal = ({
                     apiType: 'Internal', 
                     responsePath: 'result.result',
                     gridColumns: [],
+                    gridWriteMode: 'Append',
                     ...initialValues 
                 });
             }

@@ -7,7 +7,7 @@
  * @returns {object} Payload
  */
 export const constructPayload = (transactionType, config, mappedObjects, objectDefinitions) => {
-    const { projectName, flowName, flowDocName, formName, flowParams, formParams: configFormParams, loginAs } = config;
+    const { projectName, flowName, flowDocName, formName, documentId, flowParams, formParams: configFormParams, loginAs } = config;
 
     // Helper to organize objects into types
     const formObjects = [];
@@ -19,6 +19,7 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
         if (obj.Type === 'InlineGrid') {
             inlineGridsArray.push({
                 FieldName: obj.FieldName,
+                WriteMode: obj.WriteMode || 'Append',
                 Rows: obj.Rows || []
             });
         } else if (obj.Type === 'RelatedGrid') {
@@ -27,6 +28,7 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
                 ProjectName: obj.ProjectName,
                 FormName: obj.FormName,
                 DocumentIdColumnName: obj.DocumentIdColumnName,
+                WriteMode: obj.WriteMode || 'Append',
                 Rows: obj.Rows || []
             });
         } else if (obj.Type === 'RelatedDocument') {
@@ -70,6 +72,8 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
             FormFields: formFields
         };
         if (loginAs) result.LoginAs = String(loginAs);
+        if (transactionType === 'CreateForm') result.DocumentId = 0;
+        if (transactionType === 'EditForm') result.DocumentId = documentId;
         return result;
 
     } else {

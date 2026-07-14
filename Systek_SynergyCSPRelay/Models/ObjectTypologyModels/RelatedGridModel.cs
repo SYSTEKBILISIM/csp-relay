@@ -8,6 +8,7 @@ namespace Ataven.Models
         public string ProjectName { get; set; }
         public string FormName { get; set; }
         public string DocumentIdColumnName { get; set; }
+        public string WriteMode { get; set; } = "Append";
         public List<RelatedGridRowModel> Rows { get; set; }
     }
 }

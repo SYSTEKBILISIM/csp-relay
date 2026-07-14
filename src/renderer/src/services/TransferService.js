@@ -294,6 +294,53 @@ async function uploadFileInParts(baseUrl, headers, fileInfo, category, execution
     };
 }
 
+async function executeDocumentTransfer(rowData, definitionData, globalStore, executionLog) {
+    const localPath = String(getRowValue(rowData, definitionData.localPathColumn) || '').trim();
+    const targetPath = String(getRowValue(rowData, definitionData.cspPathColumn) || '').trim();
+
+    if (!localPath) {
+        throw new Error(`Local file path is empty in Excel column '${definitionData.localPathColumn || ''}'.`);
+    }
+    if (!targetPath) {
+        throw new Error(`CSP target path is empty in Excel column '${definitionData.cspPathColumn || ''}'.`);
+    }
+    if (!window.api?.readFileAsBuffer) {
+        throw new Error('Local file reader is not available.');
+    }
+
+    const fileInfo = await window.api.readFileAsBuffer(localPath);
+    if (!fileInfo?.success) {
+        throw new Error(`Failed to read local file '${localPath}': ${fileInfo?.error || 'Unknown error'}`);
+    }
+
+    const deployUrl = globalStore.get('deployUrl');
+    if (!deployUrl) throw new Error('Deploy URL not found');
+
+    const baseUrl = `${deployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer`;
+    const headers = { 'Content-Type': 'application/json' };
+    const token = globalStore.get('token');
+    const encryptedData = globalStore.get('encryptedData');
+    if (token) headers.Authorization = `Bearer ${token}`;
+    if (encryptedData) headers['bimser-encrypted-data'] = encryptedData;
+    headers['bimser-language'] = globalStore.get('language') || 'tr-TR';
+
+    const uploadResult = await uploadFileInParts(baseUrl, headers, fileInfo, targetPath, executionLog);
+    return {
+        status: 'Success',
+        message: 'Document Uploaded',
+        payload: {
+            MainId: getRowValue(rowData, definitionData.mainIdColumn),
+            LocalPath: localPath,
+            TargetPath: targetPath,
+            FileName: fileInfo.name,
+            FileSize: fileInfo.size
+        },
+        response: uploadResult,
+        executionLog,
+        warnings: []
+    };
+}
+
 async function submitRelatedGridRow(projectName, formName, formFields, globalStore, executionLog = [], loginAs = null) {
     const logEntry = { key: `rg_${Date.now()}_${Math.random()}`, step: 'RelatedGrid Submit', details: `Form: ${formName}`, status: 'Pending' };
     executionLog.push(logEntry);
@@ -1010,6 +1057,10 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
     try {
         executionLog.push({ key: `init_${Date.now()}_${Math.random()}`, step: 'Initialize', details: 'Row parsing started', status: 'Success' });
 
+        if (globalStore.get('transactionType') === 'DocumentTransfer') {
+            return await executeDocumentTransfer(rowData, definitionData, globalStore, executionLog);
+        }
+
         // 1. Resolve Mapped Objects
         const mappedObjects = [];
         const objectContext = {}; // for dependencies
@@ -1095,6 +1146,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                 ProjectName: colDef.mapping?.relatedProjectName,
                                 FormName: colDef.mapping?.relatedFormName,
                                 DocumentIdColumnName: colDef.mapping?.relatedDocIdCol,
+                                WriteMode: colDef.mapping?.gridWriteMode || 'Append',
                                 Rows: nestedRows
                             });
                             continue;
@@ -1102,6 +1154,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                             rowObjects.push({
                                 FieldName: colDef.name,
                                 Type: 'InlineGrid',
+                                WriteMode: colDef.mapping?.gridWriteMode || 'Append',
                                 Rows: nestedRows
                             });
                             continue;
@@ -1218,13 +1271,14 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                 validRowObjects.forEach(obj => {
                     if (obj.Type === 'InlineGrid') {
-                        inlineGrids.push({ FieldName: obj.FieldName, Rows: obj.Rows || [] });
+                        inlineGrids.push({ FieldName: obj.FieldName, WriteMode: obj.WriteMode || 'Append', Rows: obj.Rows || [] });
                     } else if (obj.Type === 'RelatedGrid') {
                         relatedGrids.push({
                             FieldName: obj.FieldName,
                             ProjectName: obj.ProjectName,
                             FormName: obj.FormName,
                             DocumentIdColumnName: obj.DocumentIdColumnName,
+                            WriteMode: obj.WriteMode || 'Append',
                             Rows: obj.Rows || []
                         });
                     } else if (obj.Type === 'RelatedDocument') {
@@ -1276,6 +1330,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         };
 
         // --- Dependency Graph based Concurrent Object Resolution ---
+        const objectDefinitions = definitionData.objects || [];
+        const objectDefinitionsByName = new Map(objectDefinitions.map(def => [def.name, def]));
         const getDependencies = (def) => {
             const deps = new Set();
             const mappingStr = JSON.stringify(def.mapping || {});
@@ -1285,12 +1341,29 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 const token = match[1].trim();
                 const baseKey = token.split('.')[0];
                 // Check if the token baseKey matches any other object's name
-                if (definitionData.objects && definitionData.objects.some(o => o.name === baseKey && o.name !== def.name)) {
+                if (objectDefinitionsByName.has(baseKey) && baseKey !== def.name) {
                     deps.add(baseKey);
                 }
             }
             return Array.from(deps);
         };
+
+        const dependencyMap = new Map(objectDefinitions.map(def => [def.name, getDependencies(def)]));
+        const visitState = new Map();
+        const validateDependencyGraph = (objectName, path = []) => {
+            const state = visitState.get(objectName);
+            if (state === 'visited') return;
+            if (state === 'visiting') {
+                throw new Error(`Circular object dependency detected: ${[...path, objectName].join(' -> ')}`);
+            }
+
+            visitState.set(objectName, 'visiting');
+            for (const dependencyName of dependencyMap.get(objectName) || []) {
+                validateDependencyGraph(dependencyName, [...path, objectName]);
+            }
+            visitState.set(objectName, 'visited');
+        };
+        objectDefinitions.forEach(def => validateDependencyGraph(def.name));
 
         const objectPromises = {};
 
@@ -1299,11 +1372,11 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 return objectPromises[def.name];
             }
 
-            const task = async () => {
-                const deps = getDependencies(def);
+            const task = Promise.resolve().then(async () => {
+                const deps = dependencyMap.get(def.name) || [];
                 // Wait for dependencies to finish first
                 await Promise.all(deps.map(depName => {
-                    const depDef = definitionData.objects.find(o => o.name === depName);
+                    const depDef = objectDefinitionsByName.get(depName);
                     return depDef ? resolveObjectTask(depDef) : Promise.resolve();
                 }));
 
@@ -1316,7 +1389,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     if (masterCol) {
                         const masterValue = getRowValue(rowData, masterCol);
                         const resolvedRows = await resolveGridRows(type, mapping, masterValue);
-                        rowObj = { FieldName: def.name, Type: 'InlineGrid', Rows: resolvedRows };
+                        rowObj = { FieldName: def.name, Type: 'InlineGrid', WriteMode: mapping.gridWriteMode || 'Append', Rows: resolvedRows };
                     }
                 } else if (type === 'RelatedGrid') {
                     const masterCol = mapping.masterKey;
@@ -1329,6 +1402,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                             ProjectName: mapping.relatedProjectName,
                             FormName: mapping.relatedFormName,
                             DocumentIdColumnName: mapping.relatedDocIdCol,
+                            WriteMode: mapping.gridWriteMode || 'Append',
                             Rows: resolvedRows
                         };
                     }
@@ -1421,14 +1495,14 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 }
 
                 return rowObj;
-            };
+            });
 
-            objectPromises[def.name] = task();
+            objectPromises[def.name] = task;
             return objectPromises[def.name];
         };
 
         // Execute all objects concurrently (dependency graph determines the real execution order)
-        const allMappedObjects = await Promise.all((definitionData.objects || []).map(def => resolveObjectTask(def)));
+        const allMappedObjects = await Promise.all(objectDefinitions.map(def => resolveObjectTask(def)));
         mappedObjects.push(...allMappedObjects.filter(Boolean));
 
         // Resolve Flow & Form Parameters AFTER objects are resolved (so they can access objectContext)
@@ -1437,9 +1511,20 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
         // 2. Construct Payload
         const transactionType = globalStore.get('transactionType') || 'CreateFlow';
+        const rawDocumentId = transactionType === 'EditForm'
+            ? getRowValue(rowData, definitionData.documentIdColumn)
+            : null;
+        const documentId = rawDocumentId === null || rawDocumentId === undefined || rawDocumentId === ''
+            ? null
+            : Number(rawDocumentId);
+
+        if (transactionType === 'EditForm' && (!Number.isSafeInteger(documentId) || documentId < 0)) {
+            throw new Error(`Invalid DocumentId in Excel column '${definitionData.documentIdColumn || ''}': ${rawDocumentId ?? '(empty)'}`);
+        }
         const config = {
             projectName: globalStore.get('projectName'),
             formName: globalStore.get('formName'),
+            documentId,
             flowName: globalStore.get('flowName'),
             flowDocName: globalStore.get('flowDocumentName'),
             startingEventCode: globalStore.get('startingEventCode'),
@@ -1549,6 +1634,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         DocumentName: job.documentName,
                         RelatedGrid: {
                             ...job.relatedGrid,
+                            WriteMode: i === 0 ? (job.relatedGrid.WriteMode || 'Append') : 'Append',
                             Rows: chunkRows
                         }
                     };

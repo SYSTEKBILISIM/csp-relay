@@ -428,6 +428,7 @@ export const ProjectScreen = ({ onFinish, deployAgents = [], initialData }) => {
                                         <Option value="CreateFlow">CreateFlow</Option>
                                         <Option value="CreateForm">CreateForm</Option>
                                         <Option value="EditForm">EditForm</Option>
+                                        <Option value="DocumentTransfer">DocumentTransfer</Option>
                                     </Select>
                                 </Form.Item>
                             )}
@@ -696,7 +697,7 @@ export const ProjectScreen = ({ onFinish, deployAgents = [], initialData }) => {
                                         onSelect={() => document.activeElement.blur()}
                                         loading={projectsLoading}
                                         placeholder="Select project"
-                                        prefix={<ProjectOutlined className="project-select-secondary-icon" />}
+                                        prefix={<ProjectOutlined className={watchedProjectName ? "project-select-icon-active" : "project-select-icon-default"} />}
                                         className="project-select project-select-full"
                                         classNames={{ popup: 'project-select-popup' }}
                                         filterOption={(input, option) => {

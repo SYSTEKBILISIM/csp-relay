@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Card, Typography, Button, Table, Progress, Statistic, Row, Col, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Popover, Checkbox, Select, App } from 'antd';
-import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, CloudUploadOutlined, CloudDownloadOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, ExportOutlined } from '@ant-design/icons';
+import { Card, Typography, Button, Table, Progress, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Popover, Checkbox, Select, App } from 'antd';
+import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, CloudUploadOutlined, CloudDownloadOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, ExportOutlined, OrderedListOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import Editor from '@monaco-editor/react';
 import { useTransferExecution } from '../hooks/useTransferExecution';
@@ -66,6 +66,37 @@ const { Option } = Select;
 const QUEUE_SELECTION_COLUMN_WIDTH = 28;
 const QUEUE_DRAG_COLUMN_WIDTH = 22;
 
+const formatExecutionTime = timestamp => timestamp
+    ? {
+        date: new Date(timestamp).toLocaleDateString(),
+        time: new Date(timestamp).toLocaleTimeString()
+    }
+    : '-';
+
+const formatElapsedTime = milliseconds => {
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) return '-';
+    const totalSeconds = Math.floor(milliseconds / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    return hours > 0
+        ? `${hours}h ${minutes}m ${seconds}s`
+        : minutes > 0
+            ? `${minutes}m ${seconds}s`
+            : `${seconds}s`;
+};
+
+const ExecutionDateValue = ({ timestamp }) => {
+    const value = formatExecutionTime(timestamp);
+    if (value === '-') return <span className="execution-time-empty">-</span>;
+    return (
+        <span className="execution-date-value">
+            <strong>{value.time}</strong>
+            <small>{value.date}</small>
+        </span>
+    );
+};
+
 
 export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChange }) => {
     const { message } = App.useApp();
@@ -76,6 +107,9 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         stats,
         logs,
         estimatedTime,
+        executionMode,
+        setExecutionMode,
+        executionTiming,
         isComplete,
         excelData, // Exposed if needed for UI checks
         isPaused,
@@ -438,6 +472,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     };
 
     const makeResizableColumns = (tableColumns, widths, onResize) => tableColumns.map(col => {
+        if (col === Table.SELECTION_COLUMN) return col;
         const key = col.key || col.dataIndex;
         const width = widths[key] ?? col.width;
         const nextColumn = {
@@ -616,6 +651,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 );
             }
         },
+        Table.SELECTION_COLUMN,
         {
             title: <span className="table-header-sm">#</span>,
             dataIndex: 'id',
@@ -847,40 +883,68 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         };
     };
 
+    const showTransferIndicator = loading || isPaused || retryState.isRetrying;
+    const isTransferActive = loading || retryState.isRetrying;
+
     return (
         <Card variant="borderless" className="exec-container" styles={{ body: { padding: '16px', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)' } }}>
             <div className="exec-header">
-                <Title level={3}>
-                    {isComplete ? 'Transfer Completed' : 'Queue Details & Transfer'}
-                </Title>
-                <Text type="secondary">Review summary rows and configure process execution</Text>
+                <div className="exec-header-copy">
+                    <Title level={3}>
+                        {isComplete ? 'Transfer Completed' : 'Queue Details & Transfer'}
+                    </Title>
+                    <Text type="secondary">Review summary rows and configure process execution</Text>
+                </div>
+                <Segmented
+                    className="execution-mode-header"
+                    value={executionMode}
+                    onChange={setExecutionMode}
+                    disabled={loading || isPaused || stats.processed > 0}
+                    options={[
+                        {
+                            value: 'sequential',
+                            label: <Tooltip title="Synchronous: Processes Excel rows one by one in their queue order"><OrderedListOutlined /></Tooltip>
+                        },
+                        {
+                            value: 'parallel',
+                            label: <Tooltip title="Asynchronous: Processes up to 4 independent rows at the same time"><ThunderboltOutlined /></Tooltip>
+                        }
+                    ]}
+                />
             </div>
 
-            <Card className="exec-stats-wrapper">
-                <Row gutter={24} align="middle">
-                    <Col span={6} className="exec-stats-circle">
-                        <Progress type="circle" percent={progress} size={80} strokeColor={progress === 100 ? '#10b981' : '#3b82f6'} />
-                    </Col>
-                    <Col span={18}>
-                        <Row gutter={16}>
-                            <Col span={8}>
-                                <Statistic
-                                    title={
-                                        <div className="stats-processed-header">
-                                            <span>Processed</span>
-                                            {retryState.isRetrying && (
-                                                <div className="retry-badge">
-                                                    <SyncOutlined spin style={{ fontSize: 9 }} />
-                                                    Retry {retryState.processed}/{retryState.total}
-                                                </div>
-                                            )}
-                                        </div>
-                                    }
-                                    value={`${stats.processed} / ${stats.total}`}
-                                    prefix={<SyncOutlined spin={loading && !retryState.isRetrying} />}
-                                />
-                            </Col>
-                            <Col span={8}>
+            <Card className="exec-stats-wrapper" styles={{ body: { padding: '18px 22px' } }}>
+                <div className="execution-stats-layout">
+                    <div className="exec-stats-circle">
+                        <Progress
+                            type="circle"
+                            percent={progress}
+                            size={108}
+                            strokeWidth={6}
+                            strokeColor={progress === 100 ? '#10b981' : '#3b82f6'}
+                            trailColor="#e8eef6"
+                        />
+                    </div>
+                    <div className="execution-counts-grid">
+                        <div className="execution-count-item count-processed">
+                            <div className="execution-count-label">
+                                <span>Processed</span>
+                                {retryState.isRetrying && (
+                                    <div className="retry-badge">
+                                        <SyncOutlined spin style={{ fontSize: 9 }} />
+                                        Retry {retryState.processed}/{retryState.total}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="execution-count-value">
+                                {showTransferIndicator && (
+                                    <CloudUploadOutlined className={isTransferActive ? 'transfer-processing-icon is-active' : 'transfer-processing-icon'} />
+                                )}{' '}
+                                {stats.processed} / {stats.total}
+                            </div>
+                        </div>
+                        <div className="execution-count-item count-success">
+                            <div className="execution-count-label">Success</div>
                                 <Tooltip
                                     title={
                                         <div className="stats-tooltip-container">
@@ -902,12 +966,11 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                                     placement="bottomLeft"
                                     arrow={true}
                                 >
-                                    <div className="stats-help-cursor">
-                                        <Statistic title="Success" value={stats.success} styles={{ content: { color: '#16a34a' } }} prefix={<CheckCircleOutlined />} />
-                                    </div>
+                                    <div className="execution-count-value stats-help-cursor"><CheckCircleOutlined /> {stats.success}</div>
                                 </Tooltip>
-                            </Col>
-                            <Col span={8}>
+                        </div>
+                        <div className="execution-count-item count-failed">
+                            <div className="execution-count-label">Failed</div>
                                 <Tooltip
                                     title={
                                         <div className="stats-tooltip-container">
@@ -933,51 +996,61 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                                     placement="bottomLeft"
                                     arrow={true}
                                 >
-                                    <div className="stats-help-cursor">
-                                        <Statistic title="Failed" value={stats.error} styles={{ content: { color: '#dc2626' } }} prefix={<CloseCircleOutlined />} />
-                                    </div>
+                                    <div className="execution-count-value stats-help-cursor"><CloseCircleOutlined /> {stats.error}</div>
                                 </Tooltip>
-                            </Col>
-                            <Col span={8} style={{ marginTop: 16 }}>
-                                <div style={{ fontSize: 12, color: '#94a3b8', fontWeight: 500, marginBottom: 2 }}>Est. Time</div>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <span style={{ fontSize: 20, fontWeight: 600, color: '#1e293b' }}>{estimatedTime || '-'}</span>
-                                </div>
-                            </Col>
-                        </Row>
-                    </Col>
-                </Row>
+                        </div>
+                    </div>
+                    <div className="execution-timing-grid">
+                        <div className="execution-time-stat">
+                            <div className="execution-time-label">Estimated</div>
+                            <div className="execution-time-value">{estimatedTime || '-'}</div>
+                        </div>
+                        <div className="execution-time-stat">
+                            <div className="execution-time-label">Started</div>
+                            <div className="execution-time-value"><ExecutionDateValue timestamp={executionTiming.startedAt} /></div>
+                        </div>
+                        <div className="execution-time-stat">
+                            <div className="execution-time-label">Finished</div>
+                            <div className="execution-time-value"><ExecutionDateValue timestamp={executionTiming.endedAt} /></div>
+                        </div>
+                        <div className="execution-time-stat">
+                            <div className="execution-time-label">Total</div>
+                            <div className="execution-time-value">{executionTiming.startedAt ? formatElapsedTime(executionTiming.elapsedMs) : '-'}</div>
+                        </div>
+                    </div>
+                </div>
             </Card>
 
             <div className="action-buttons-row">
+                <div className="transfer-action-buttons">
                 {!loading && !isPaused && !isComplete && !retryState.isRetrying && (
-                    <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleStartTransfer} size="large" block>Start Transfer</Button>
+                    <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleStartTransfer} size="large">Start Transfer</Button>
                 )}
                 {isPaused && !loading && (
-                    <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => { setSearchText(''); setCurrentMatchIndex(-1); resumeTransfer(); }} size="large" block
+                    <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => { setSearchText(''); setCurrentMatchIndex(-1); resumeTransfer(); }} size="large"
                         className="resume-btn">
                         {isRetryMode ? 'Resume Retry' : 'Resume Transfer'}
                     </Button>
                 )}
                 {loading && (
-                    <Button type="default" icon={<PauseCircleOutlined />} onClick={pauseTransfer} disabled={isPaused || isStopping || isPausing} size="large" block
+                    <Button type="default" icon={<PauseCircleOutlined />} onClick={pauseTransfer} disabled={isPaused || isStopping || isPausing} size="large"
                         className="pause-btn">
                         {isPausing ? (isRetryMode ? 'Pausing Retry...' : 'Pausing...') : (isRetryMode ? 'Pause Retry' : 'Pause')}
                     </Button>
                 )}
                 {(loading || isPaused) && (
-                    <Button danger icon={<StopOutlined />} onClick={stopTransfer} size="large" block disabled={isStopping || isPausing}>
+                    <Button danger icon={<StopOutlined />} onClick={stopTransfer} size="large" disabled={isStopping || isPausing}>
                         {isStopping ? (isRetryMode ? 'Stopping Retry...' : 'Stopping...') : (isRetryMode ? 'Stop Retry' : 'Stop Transfer')}
                     </Button>
                 )}
 
                 {isComplete && totalErrs > 0 && (
                     <Popover content={retryPopoverContent} title="Retry Configuration" trigger="click" placement="bottomLeft">
-                        <Button type="primary" danger icon={<UndoOutlined />} size="large" block>Retry {totalErrs} Failed Rows</Button>
+                        <Button type="primary" danger icon={<UndoOutlined />} size="large">Retry {totalErrs} Failed Rows</Button>
                     </Popover>
                 )}
                 {isComplete && (
-                    <Button type="dashed" icon={<ReloadOutlined />} onClick={resetTransfer} size="large" block>Restart from Scratch</Button>
+                    <Button type="dashed" icon={<ReloadOutlined />} onClick={resetTransfer} size="large">Restart from Scratch</Button>
                 )}
 
                 {(!loading && stats.processed > 0) && (
@@ -1002,6 +1075,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                         </Tooltip>
                     </Space>
                 )}
+                </div>
             </div>
 
             <div className="table-controls">
