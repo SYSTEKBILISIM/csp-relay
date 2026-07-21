@@ -6,7 +6,7 @@ import { logDB } from '../services/IndexedDBService';
 
 const MAX_DETAIL_LOGS = 500;
 const DEFAULT_WORK_UNITS = 1;
-const PARALLEL_ROW_LIMIT = 4;
+const PARALLEL_ROW_LIMIT = 5;
 
 // Reusable hook for transfer logic
 const cleanJson = (data) => {
@@ -50,7 +50,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     });
     const [logs, setLogs] = useState([]);
     const [estimatedTime, setEstimatedTime] = useState(null);
-    const [executionMode, setExecutionMode] = useState('sequential');
+    const [executionMode, _setExecutionMode] = useState('sequential');
+    const executionModeRef = useRef('sequential');
     const [executionTiming, setExecutionTiming] = useState({
         startedAt: null,
         endedAt: null,
@@ -101,6 +102,11 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         const payload = { ...retryStateRef.current, ...newState };
         retryStateRef.current = payload;
         setRetryState(payload);
+    };
+
+    const setExecutionMode = (mode) => {
+        executionModeRef.current = mode;
+        _setExecutionMode(mode);
     };
 
     // Performance Optimization for Huge Arrays (100k+ records)
@@ -165,7 +171,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             setIsPausing(true);
             isPausingRef.current = true;
             isRunning.current = false;
-            message.info(executionMode === 'parallel'
+            message.info(executionModeRef.current === 'parallel'
                 ? 'Pausing transfer... waiting for active rows.'
                 : 'Pausing transfer... waiting for current row.');
         }
@@ -176,7 +182,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             setIsStopping(true);
             isStoppingRef.current = true;
             isRunning.current = false;
-            message.info(executionMode === 'parallel'
+            message.info(executionModeRef.current === 'parallel'
                 ? 'Stopping transfer... waiting for active rows.'
                 : 'Stopping transfer... waiting for current row.');
         } else if (isPaused || isPausedRef.current) {
@@ -188,13 +194,19 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 endedAt,
                 elapsedMs: prev.startedAt ? endedAt - prev.startedAt : 0
             }));
-            setIsPaused(false);
-            isPausedRef.current = false;
+            const remainingRows = getExecutableRows(wasRetryContextRef.current);
+            const canResume = remainingRows.length > 0;
+            setIsPaused(canResume);
+            isPausedRef.current = canResume;
             setLoading(false);
-            setIsComplete(true);
-            wasRetryContextRef.current = false;
-            setIsRetryMode(false);
-            message.warning('Transfer completely stopped.');
+            setIsComplete(!canResume);
+            if (!canResume) {
+                wasRetryContextRef.current = false;
+                setIsRetryMode(false);
+            }
+            message.warning(canResume
+                ? 'Transfer stopped. You can change execution mode and resume from the next pending row.'
+                : 'Transfer completely stopped.');
             if (onStatusChange) onStatusChange(false);
         }
     };
@@ -203,6 +215,28 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         if (isPausedRef.current || isPaused) {
             startTransfer(wasRetryContextRef.current);
         }
+    };
+
+    const getExecutableRows = (isRetryContext = false) => logsStateRef.current.filter(log => {
+        if (!selectedRowKeysRef.current.includes(log.key)) return false;
+        if (isRetryContext) return log.status === 'Error' || log.status === 'ValidationError';
+        return log.status === 'Pending';
+    });
+
+    const finishTransfer = () => {
+        const endedAt = Date.now();
+        executionTimingRef.current.endedAt = endedAt;
+        setExecutionTiming(prev => ({
+            ...prev,
+            endedAt,
+            elapsedMs: prev.startedAt ? endedAt - prev.startedAt : 0
+        }));
+        setLoading(false);
+        setIsPaused(false);
+        isPausedRef.current = false;
+        setIsComplete(true);
+        updateRetryState({ isRetrying: false });
+        if (onStatusChange) onStatusChange(false);
     };
 
     const syncGlobalStats = () => {
@@ -250,14 +284,17 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         wasRetryContextRef.current = isRetryContext;
         setIsRetryMode(isRetryContext);
 
-        const pendingRows = logsStateRef.current.filter(log => {
-            if (!selectedRowKeysRef.current.includes(log.key)) return false;
-            if (isRetryContext) return log.status === 'Error' || log.status === 'ValidationError';
-            return log.status === 'Pending';
-        });
+        const pendingRows = getExecutableRows(isRetryContext);
 
         if (pendingRows.length === 0) {
-            message.warning('No entries match execution criteria.');
+            if (isResuming) {
+                finishTransfer();
+                wasRetryContextRef.current = false;
+                setIsRetryMode(false);
+                message.info('Transfer already completed. No rows left to resume.');
+            } else {
+                message.warning('No entries match execution criteria.');
+            }
             return;
         }
 
@@ -289,7 +326,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         let sessionProcessedCount = 0;
         let sessionDurationAccumulator = 0;
         let sessionWorkUnitsAccumulator = 0;
-        const rowConcurrency = executionMode === 'parallel'
+        const rowConcurrency = executionModeRef.current === 'parallel'
             ? Math.min(PARALLEL_ROW_LIMIT, pendingRows.length)
             : 1;
 
@@ -431,23 +468,38 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         isRunning.current = false;
 
         if (wasPaused) {
-            setIsPaused(true);
-            isPausedRef.current = true;
-            message.success('Transfer paused successfully.');
-        } else {
-            const endedAt = Date.now();
-            executionTimingRef.current.endedAt = endedAt;
-            setExecutionTiming(prev => ({
-                ...prev,
-                endedAt,
-                elapsedMs: prev.startedAt ? endedAt - prev.startedAt : 0
-            }));
-            setIsComplete(true);
-            if (wasStopped) {
-                message.warning('Transfer completely stopped.');
+            const remainingRows = getExecutableRows(isRetryContext);
+            const canResume = remainingRows.length > 0;
+
+            if (canResume) {
+                setIsPaused(true);
+                isPausedRef.current = true;
+                setIsComplete(false);
+                message.success('Transfer paused successfully.');
             } else {
-                message.success('Transfer process completed successfully.');
+                finishTransfer();
+                wasRetryContextRef.current = false;
+                setIsRetryMode(false);
+                message.info('Transfer completed before pause. No rows left to resume.');
             }
+        } else if (wasStopped) {
+            const remainingRows = getExecutableRows(isRetryContext);
+            const canResume = remainingRows.length > 0;
+
+            if (canResume) {
+                setIsPaused(true);
+                isPausedRef.current = true;
+                setIsComplete(false);
+                message.warning('Transfer stopped. You can change execution mode and resume from the next pending row.');
+            } else {
+                finishTransfer();
+                wasRetryContextRef.current = false;
+                setIsRetryMode(false);
+                message.warning('Transfer completely stopped.');
+            }
+        } else {
+            finishTransfer();
+            message.success('Transfer process completed successfully.');
 
             if (isRetryContext) {
                 updateRetryState({ isRetrying: false });

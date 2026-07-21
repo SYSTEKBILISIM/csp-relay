@@ -107,7 +107,7 @@
 }
 
 .exec-header .ant-typography-title {
-    font-weight: 700 !important;
+    font-weight: 600 !important;
     color: #1e293b !important;
     margin: 0 !important;
 }
@@ -200,7 +200,7 @@
     margin-bottom: 4px;
     color: #6b7c93;
     font-size: 11px;
-    font-weight: 700;
+    font-weight: 500;
     line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -209,21 +209,40 @@
 .execution-count-value {
     color: #1e293b;
     font-size: 21px;
-    font-weight: 700;
+    font-weight: 500;
     line-height: 1.25;
 }
 
-.transfer-processing-icon {
-    margin-right: 6px;
-    color: #3b82f6;
-    font-size: 16px;
+.transfer-activity-loader {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    width: 22px;
+    height: 14px;
+    margin-right: 7px;
     vertical-align: -1px;
-    transform-origin: 50% 50%;
-    opacity: 0.9;
 }
 
-.transfer-processing-icon.is-active {
-    animation: transferCloudUpload 1s ease-in-out infinite;
+.transfer-activity-loader span {
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: #60a5fa;
+    opacity: 0.45;
+    transform: translateY(0);
+}
+
+.transfer-activity-loader.is-active span {
+    animation: transferFlowPulse 0.9s ease-in-out infinite;
+}
+
+.transfer-activity-loader span:nth-child(2) {
+    animation-delay: 0.12s;
+}
+
+.transfer-activity-loader span:nth-child(3) {
+    animation-delay: 0.24s;
 }
 
 .count-success .execution-count-value {
@@ -269,7 +288,7 @@
     overflow: hidden;
     color: #1e293b;
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
     line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -281,9 +300,9 @@
     gap: 1px;
 }
 
-.execution-date-value strong {
+.execution-date-value > span {
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 500;
 }
 
 .execution-date-value small {
@@ -312,12 +331,13 @@
     display: inline-flex;
     align-items: center;
     gap: 4px;
+    margin-left: 8px;
     background: #fef3c7;
     border: 1px solid #fbbf24;
     border-radius: 12px;
     padding: 1px 8px;
     font-size: 10px;
-    font-weight: 700;
+    font-weight: 500;
     color: #92400e;
 }
 
@@ -355,15 +375,15 @@
     font-size: 11px;
 }
 
-@keyframes transferCloudUpload {
+@keyframes transferFlowPulse {
     0%,
     100% {
-        transform: translateY(0) scale(0.98);
-        opacity: 0.75;
+        transform: translateY(0) scale(0.85);
+        opacity: 0.35;
     }
 
     50% {
-        transform: translateY(-3px) scale(1.04);
+        transform: translateY(-3px) scale(1);
         opacity: 1;
     }
 }

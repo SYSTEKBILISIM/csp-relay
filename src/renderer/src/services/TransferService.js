@@ -38,6 +38,69 @@ function getApiPageSize(parsedBody) {
     return Number.isFinite(configuredTake) && configuredTake > 0 ? configuredTake : DEFAULT_API_PAGE_SIZE;
 }
 
+function resolveApiParameterValue(value, rowData, objectContext) {
+    const rawVal = resolveTokens(value, rowData, objectContext);
+    if (typeof rawVal !== 'string') return rawVal;
+    if (rawVal !== '' && !isNaN(rawVal)) return Number(rawVal);
+    if (rawVal.toLowerCase() === 'true') return true;
+    if (rawVal.toLowerCase() === 'false') return false;
+    return rawVal;
+}
+
+function injectInternalApiParameters(parsedBody, parameters, rowData, objectContext) {
+    if (!Array.isArray(parameters)) return;
+
+    const resolvedParameters = [];
+
+    parameters.forEach(param => {
+        if (!param?.key) return;
+
+        const finalVal = resolveApiParameterValue(param.value, rowData, objectContext);
+        parsedBody[param.key] = finalVal;
+        resolvedParameters.push({ key: param.key, value: finalVal });
+    });
+
+    if (resolvedParameters.length > 0) {
+        parsedBody.parameters = resolvedParameters;
+    }
+}
+
+function getDuplicateCheckColumns(mapping) {
+    const configuredColumns = Array.isArray(mapping?.duplicateCheckColumns)
+        ? mapping.duplicateCheckColumns.filter(Boolean)
+        : [];
+    const columnSettings = (mapping?.gridColumns || [])
+        .filter(column => column?.name && (
+            column?.skipIfDuplicate === true || column?.mapping?.skipIfDuplicate === true
+        ))
+        .map(column => column.name);
+
+    return [...new Set([...configuredColumns, ...columnSettings])];
+}
+
+function getDuplicateCaseSensitiveColumns(mapping) {
+    const configuredColumns = Array.isArray(mapping?.duplicateCaseSensitiveColumns)
+        ? mapping.duplicateCaseSensitiveColumns.filter(Boolean)
+        : [];
+    const columnSettings = (mapping?.gridColumns || [])
+        .filter(column => column?.name && (
+            column?.skipIfDuplicate === true || column?.mapping?.skipIfDuplicate === true
+        ) && (
+            column?.duplicateCaseSensitive === true || column?.mapping?.duplicateCaseSensitive === true
+        ))
+        .map(column => column.name);
+
+    return [...new Set([...configuredColumns, ...columnSettings])];
+}
+
+function usesDuplicateGridPrevention(objectDefinitions = []) {
+    return objectDefinitions.some(definition => {
+        const mapping = definition?.mapping || {};
+        if (getDuplicateCheckColumns(mapping).length > 0) return true;
+        return usesDuplicateGridPrevention(mapping.gridColumns || []);
+    });
+}
+
 function withPagination(body, skip, take) {
     const parsedBody = parseJsonBody(body);
     if (!parsedBody.loadOptions) parsedBody.loadOptions = {};
@@ -620,21 +683,7 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
                 take: getApiPageSize(parsedBody)
             };
             if (parsedBody.forceRefresh === undefined) parsedBody.forceRefresh = false;
-            if (mapping.parameters && Array.isArray(mapping.parameters)) {
-                mapping.parameters.forEach(p => {
-                    if (p.key) {
-                        const rawVal = resolveTokens(p.value, rowData, objectContext);
-                        let finalVal = rawVal;
-                        if (typeof rawVal === 'string') {
-                            if (rawVal !== '' && !isNaN(rawVal)) finalVal = Number(rawVal);
-                            else if (rawVal.toLowerCase() === 'true') finalVal = true;
-                            else if (rawVal.toLowerCase() === 'false') finalVal = false;
-                        }
-                        parsedBody[p.key] = finalVal;
-                    }
-                });
-                delete parsedBody.parameters;
-            }
+            injectInternalApiParameters(parsedBody, mapping.parameters, rowData, objectContext);
             resolvedBody = JSON.stringify(parsedBody);
         } catch (e) {
             console.warn('Failed to inject parameters into Internal API body (array item)', e);
@@ -841,32 +890,9 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
                     parsedBody.forceRefresh = false;
                 }
 
-                // 5. Handle Parameters: Attach directly to root object (as per user screenshot)
-                if (mapping.parameters && Array.isArray(mapping.parameters)) {
-                    mapping.parameters.forEach(p => {
-                        if (p.key) {
-                            const rawVal = resolveTokens(p.value, rowData, objectContext);
-                            let finalVal = rawVal;
-
-                            // Cast to number or boolean for correct API processing
-                            if (typeof rawVal === 'string') {
-                                if (rawVal !== '' && !isNaN(rawVal)) {
-                                    finalVal = Number(rawVal);
-                                } else if (rawVal.toLowerCase() === 'true') {
-                                    finalVal = true;
-                                } else if (rawVal.toLowerCase() === 'false') {
-                                    finalVal = false;
-                                }
-                            }
-
-                            // Attach to root of parsedBody
-                            parsedBody[p.key] = finalVal;
-                        }
-                    });
-
-                    // Remove parameters array if it existed accidentally
-                    delete parsedBody.parameters;
-                }
+                // 5. Handle Parameters in both supported payload shapes:
+                // root fields (DISTRICTID: 2060) and parameters array ({ key, value }).
+                injectInternalApiParameters(parsedBody, mapping.parameters, rowData, objectContext);
 
                 resolvedBody = JSON.stringify(parsedBody);
             } catch (e) {
@@ -1147,6 +1173,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                 FormName: colDef.mapping?.relatedFormName,
                                 DocumentIdColumnName: colDef.mapping?.relatedDocIdCol,
                                 WriteMode: colDef.mapping?.gridWriteMode || 'Append',
+                                UniqueColumns: getDuplicateCheckColumns(colDef.mapping),
+                                CaseSensitiveUniqueColumns: getDuplicateCaseSensitiveColumns(colDef.mapping),
                                 Rows: nestedRows
                             });
                             continue;
@@ -1155,6 +1183,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                 FieldName: colDef.name,
                                 Type: 'InlineGrid',
                                 WriteMode: colDef.mapping?.gridWriteMode || 'Append',
+                                UniqueColumns: getDuplicateCheckColumns(colDef.mapping),
+                                CaseSensitiveUniqueColumns: getDuplicateCaseSensitiveColumns(colDef.mapping),
                                 Rows: nestedRows
                             });
                             continue;
@@ -1271,7 +1301,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                 validRowObjects.forEach(obj => {
                     if (obj.Type === 'InlineGrid') {
-                        inlineGrids.push({ FieldName: obj.FieldName, WriteMode: obj.WriteMode || 'Append', Rows: obj.Rows || [] });
+                        inlineGrids.push({ FieldName: obj.FieldName, WriteMode: obj.WriteMode || 'Append', UniqueColumns: obj.UniqueColumns || [], CaseSensitiveUniqueColumns: obj.CaseSensitiveUniqueColumns || [], Rows: obj.Rows || [] });
                     } else if (obj.Type === 'RelatedGrid') {
                         relatedGrids.push({
                             FieldName: obj.FieldName,
@@ -1279,6 +1309,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                             FormName: obj.FormName,
                             DocumentIdColumnName: obj.DocumentIdColumnName,
                             WriteMode: obj.WriteMode || 'Append',
+                            UniqueColumns: obj.UniqueColumns || [],
+                            CaseSensitiveUniqueColumns: obj.CaseSensitiveUniqueColumns || [],
                             Rows: obj.Rows || []
                         });
                     } else if (obj.Type === 'RelatedDocument') {
@@ -1389,7 +1421,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     if (masterCol) {
                         const masterValue = getRowValue(rowData, masterCol);
                         const resolvedRows = await resolveGridRows(type, mapping, masterValue);
-                        rowObj = { FieldName: def.name, Type: 'InlineGrid', WriteMode: mapping.gridWriteMode || 'Append', Rows: resolvedRows };
+                        rowObj = { FieldName: def.name, Type: 'InlineGrid', WriteMode: mapping.gridWriteMode || 'Append', UniqueColumns: getDuplicateCheckColumns(mapping), CaseSensitiveUniqueColumns: getDuplicateCaseSensitiveColumns(mapping), Rows: resolvedRows };
                     }
                 } else if (type === 'RelatedGrid') {
                     const masterCol = mapping.masterKey;
@@ -1403,6 +1435,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                             FormName: mapping.relatedFormName,
                             DocumentIdColumnName: mapping.relatedDocIdCol,
                             WriteMode: mapping.gridWriteMode || 'Append',
+                            UniqueColumns: getDuplicateCheckColumns(mapping),
+                            CaseSensitiveUniqueColumns: getDuplicateCaseSensitiveColumns(mapping),
                             Rows: resolvedRows
                         };
                     }
@@ -1581,6 +1615,28 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             return responseBody;
         };
 
+        if (usesDuplicateGridPrevention(definitionData.objects || [])) {
+            const capabilityLog = {
+                key: `capabilities_${Date.now()}_${Math.random()}`,
+                step: 'Relay Capability Check',
+                details: 'Checking duplicate grid row support',
+                status: 'Pending'
+            };
+            executionLog.push(capabilityLog);
+
+            try {
+                const capabilities = await postTransferJson('Capabilities', {}, capabilityLog);
+                const supportsUniqueGridColumns = capabilities?.uniqueGridColumns === true || capabilities?.UniqueGridColumns === true;
+                if (!supportsUniqueGridColumns) throw new Error('The deployed relay does not report duplicate grid row support.');
+                capabilityLog.status = 'Success';
+                capabilityLog.details = 'Duplicate grid row support is active';
+            } catch (error) {
+                capabilityLog.status = 'Error';
+                capabilityLog.details = 'The deployed Systek_SynergyCSPRelay project is outdated. Build and deploy the updated CSP project before running this transfer.';
+                throw new Error(capabilityLog.details);
+            }
+        }
+
         const extractRelatedGridJobs = (flowPayload) => {
             if (transactionType !== 'CreateFlow') return { beginPayload: flowPayload, jobs: [] };
 
@@ -1685,7 +1741,11 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
             // Check for CSP Validation Errors (Even if HTTP 200)
             let hasValidationErrors = false;
-            let validationMessages = [];
+            const validationEntries = [];
+            const pushValidationEntry = (message, source = 'Main Form') => {
+                if (!message) return;
+                validationEntries.push({ message, source });
+            };
 
             const saveResp = fullApiResponse.saveResponse || fullApiResponse;
             if (saveResp) {
@@ -1693,20 +1753,21 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                 if (Array.isArray(saveResp.validationErrors) && saveResp.validationErrors.length > 0) {
                     hasValidationErrors = true;
-                    saveResp.validationErrors.forEach(err => { if (err.message) validationMessages.push(err.message); });
+                    saveResp.validationErrors.forEach(err => pushValidationEntry(err.message, 'Main Form'));
                 }
 
                 if (saveResp.result && Array.isArray(saveResp.result.validationErrors) && saveResp.result.validationErrors.length > 0) {
                     hasValidationErrors = true;
-                    saveResp.result.validationErrors.forEach(err => { if (err.message) validationMessages.push(err.message); });
+                    saveResp.result.validationErrors.forEach(err => pushValidationEntry(err.message, 'Main Form'));
                 }
 
                 if (Array.isArray(saveResp.forms)) {
-                    saveResp.forms.forEach(f => {
+                    saveResp.forms.forEach((f, index) => {
+                        const source = f.formName || f.FormName || f.name || f.Name || f.documentName || f.DocumentName || `Form ${index + 1}`;
                         const vErrors = f.formSaveResponse?.result?.validationErrors;
                         if (Array.isArray(vErrors) && vErrors.length > 0) {
                             hasValidationErrors = true;
-                            vErrors.forEach(err => { if (err.message) validationMessages.push(err.message); });
+                            vErrors.forEach(err => pushValidationEntry(err.message, source));
                         }
                     });
                 }
@@ -1714,10 +1775,17 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
             if (hasValidationErrors) {
                 status = 'ValidationError';
-                const uniqueMsgs = [...new Set(validationMessages)];
-                msg = uniqueMsgs.length > 0 ? `• ${uniqueMsgs.join('\n• ')}` : 'Validation Failed';
+                const uniqueMsgs = [...new Set(validationEntries.map(entry => entry.message))];
+                const validationSources = [...new Set(validationEntries.map(entry => entry.source))];
+                const sourceLabel = validationSources.length === 1 ? validationSources[0] : 'Form';
                 execLog.status = 'Error';
-                execLog.details += ' - Validation Failed';
+                msg = uniqueMsgs.length > 0 ? `* ${uniqueMsgs.join('\n* ')}` : 'Validation Failed';
+                execLog.details = `${sourceLabel} validation failed`;
+                const finalizeLog = executionLog.find(log => log.step === 'FinalizeFlowSession');
+                if (finalizeLog) {
+                    finalizeLog.status = 'Error';
+                    finalizeLog.details = `Endpoint: FinalizeFlowSession - ${sourceLabel} validation failed`;
+                }
             } else {
                 status = 'Success';
                 execLog.status = 'Success';

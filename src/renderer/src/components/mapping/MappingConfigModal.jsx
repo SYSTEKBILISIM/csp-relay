@@ -14,12 +14,24 @@ export const MappingConfigModal = ({
     type = 'Object', 
     sheetColumns, 
     currentColumns,
+    mainFormFields = [],
+    formScopes = [],
+    currentFormName,
     title = "Configure Mapping",
     width = 950,
     zIndex = 1000
 }) => {
     const [form] = Form.useForm();
     const [apiStep, setApiStep] = React.useState(0);
+    const rootFormScopes = React.useMemo(() => ([{
+        key: 'main',
+        label: 'Main Form',
+        path: [],
+        fields: mainFormFields.filter(field => field?.name && field.type !== 'InlineGrid' && field.type !== 'RelatedGrid')
+    }]), [mainFormFields]);
+    const effectiveFormScopes = React.useMemo(() => (
+        formScopes.length > 0 ? formScopes : rootFormScopes
+    ), [formScopes, rootFormScopes]);
 
     useEffect(() => {
         if (visible) {
@@ -90,6 +102,21 @@ export const MappingConfigModal = ({
                     values[key] = validatedValues[key];
                 }
             });
+
+            if (type === 'InlineGrid' || type === 'RelatedGrid') {
+                values.duplicateCheckColumns = (values.gridColumns || [])
+                    .filter(column => column?.name && (
+                        column?.skipIfDuplicate === true || column?.mapping?.skipIfDuplicate === true
+                    ))
+                    .map(column => column.name);
+                values.duplicateCaseSensitiveColumns = (values.gridColumns || [])
+                    .filter(column => column?.name && (
+                        column?.skipIfDuplicate === true || column?.mapping?.skipIfDuplicate === true
+                    ) && (
+                        column?.duplicateCaseSensitive === true || column?.mapping?.duplicateCaseSensitive === true
+                    ))
+                    .map(column => column.name);
+            }
             onSave(values);
         }).catch(errorInfo => {
             if (errorInfo.errorFields && errorInfo.errorFields.length > 0) {
@@ -122,6 +149,8 @@ export const MappingConfigModal = ({
                         sheetColumns={sheetColumns}
                         excelColumns={excelColumns}
                         constructInternalUrl={constructInternalUrl}
+                        ancestorScopes={effectiveFormScopes}
+                        formName={currentFormName}
                     />
                 ) : type === 'RelatedDocument' ? (
                     <RelatedDocumentConfig
@@ -134,6 +163,7 @@ export const MappingConfigModal = ({
                             formInstance={form}
                             scopeColumns={excelColumns}
                             constructInternalUrl={constructInternalUrl}
+                            formScopes={effectiveFormScopes}
                             apiStep={apiStep}
                             setApiStep={setApiStep}
                         />

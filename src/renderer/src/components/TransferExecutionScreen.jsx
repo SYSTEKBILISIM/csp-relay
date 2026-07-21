@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Card, Typography, Button, Table, Progress, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Popover, Checkbox, Select, App } from 'antd';
-import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, CloudUploadOutlined, CloudDownloadOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, ExportOutlined, OrderedListOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, ExportOutlined, OrderedListOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import Editor from '@monaco-editor/react';
 import { useTransferExecution } from '../hooks/useTransferExecution';
@@ -91,7 +91,7 @@ const ExecutionDateValue = ({ timestamp }) => {
     if (value === '-') return <span className="execution-time-empty">-</span>;
     return (
         <span className="execution-date-value">
-            <strong>{value.time}</strong>
+            <span>{value.time}</span>
             <small>{value.date}</small>
         </span>
     );
@@ -899,7 +899,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     className="execution-mode-header"
                     value={executionMode}
                     onChange={setExecutionMode}
-                    disabled={loading || isPaused || stats.processed > 0}
+                    disabled={loading && !isPausing && !isStopping}
                     options={[
                         {
                             value: 'sequential',
@@ -907,7 +907,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                         },
                         {
                             value: 'parallel',
-                            label: <Tooltip title="Asynchronous: Processes up to 4 independent rows at the same time"><ThunderboltOutlined /></Tooltip>
+                            label: <Tooltip title="Asynchronous: Processes up to 5 independent rows at the same time"><ThunderboltOutlined /></Tooltip>
                         }
                     ]}
                 />
@@ -938,7 +938,11 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                             </div>
                             <div className="execution-count-value">
                                 {showTransferIndicator && (
-                                    <CloudUploadOutlined className={isTransferActive ? 'transfer-processing-icon is-active' : 'transfer-processing-icon'} />
+                                    <span className={isTransferActive ? 'transfer-activity-loader is-active' : 'transfer-activity-loader'} aria-hidden="true">
+                                        <span />
+                                        <span />
+                                        <span />
+                                    </span>
                                 )}{' '}
                                 {stats.processed} / {stats.total}
                             </div>
@@ -954,11 +958,11 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                                 <div className="stats-breakdown-row">
                                                     <span style={{ color: '#86efac' }}>Success:</span>
-                                                    <span style={{ fontWeight: 800 }}>{stats.successBreakdown?.Success || 0}</span>
+                                                    <span style={{ fontWeight: 500 }}>{stats.successBreakdown?.Success || 0}</span>
                                                 </div>
                                                 <div className="stats-breakdown-row">
                                                     <span style={{ color: '#fcd34d' }}>Warnings:</span>
-                                                    <span style={{ fontWeight: 800 }}>{stats.successBreakdown?.Warning || 0}</span>
+                                                    <span style={{ fontWeight: 500 }}>{stats.successBreakdown?.Warning || 0}</span>
                                                 </div>
                                             </div>
                                         </div>
@@ -980,15 +984,15 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                                                 <div className="stats-breakdown-row">
                                                     <span style={{ color: '#fca5a5' }}>System Errors:</span>
-                                                    <span style={{ fontWeight: 800 }}>{stats.errorBreakdown?.Error || 0}</span>
+                                                    <span style={{ fontWeight: 500 }}>{stats.errorBreakdown?.Error || 0}</span>
                                                 </div>
                                                 <div className="stats-breakdown-row">
                                                     <span style={{ color: '#fca5a5' }}>Validation Errors:</span>
-                                                    <span style={{ fontWeight: 800 }}>{stats.errorBreakdown?.ValidationError || 0}</span>
+                                                    <span style={{ fontWeight: 500 }}>{stats.errorBreakdown?.ValidationError || 0}</span>
                                                 </div>
                                                 <div className="stats-breakdown-total">
                                                     <span style={{ color: '#7dd3fc' }}>Total Retried:</span>
-                                                    <span style={{ fontWeight: 800, color: '#7dd3fc' }}>{stats.retried || 0}</span>
+                                                    <span style={{ fontWeight: 500, color: '#7dd3fc' }}>{stats.retried || 0}</span>
                                                 </div>
                                             </div>
                                         </div>

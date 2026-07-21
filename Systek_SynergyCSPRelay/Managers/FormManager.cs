@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Ataven.Helpers.ServiceAPIHelpers;
@@ -216,6 +217,9 @@ namespace Ataven.Managers
                         grid.Rows.Clear();
 
                     foreach(var row in inline.Rows) {
+                        if (HasDuplicateValue(grid, inline.UniqueColumns, inline.CaseSensitiveUniqueColumns, row.Objects))
+                            continue;
+
                         GridDataRow newRow = new GridDataRow();
                         foreach(var obj in row.Objects) {
                             GridDataRowCell cell = new GridDataRowCell();
@@ -281,6 +285,9 @@ namespace Ataven.Managers
                         grid.Rows.Clear();
 
                     foreach(var relatedRow in relatedGrid.Rows) {
+                        if (HasDuplicateValue(grid, relatedGrid.UniqueColumns, relatedGrid.CaseSensitiveUniqueColumns, relatedRow.FormFields?.Objects))
+                            continue;
+
                         long relatedDocumentId = relatedRow.RelationDocumentId;
                         Dictionary<string, object> resolvedRelatedParameters = ResolveParametersAgainstParent(relatedRow.FormParameters, formInstance);
                         var relatedFormInstance = _serviceAPI.FormManager.CreateWithoutView(relatedGrid.ProjectName, relatedGrid.FormName, relatedDocumentId, false, null, false, resolvedRelatedParameters).Result;
@@ -336,6 +343,85 @@ namespace Ataven.Managers
         private bool IsOverwriteMode(string writeMode)
         {
             return string.Equals(writeMode, "Overwrite", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool HasDuplicateValue(GridData grid, List<string> uniqueColumns, List<string> caseSensitiveUniqueColumns, List<ObjectModel> incomingObjects)
+        {
+            if (grid?.Rows == null || uniqueColumns == null || uniqueColumns.Count == 0 || incomingObjects == null)
+                return false;
+
+            foreach (string columnName in uniqueColumns.Where(name => !string.IsNullOrWhiteSpace(name)))
+            {
+                ObjectModel incomingObject = incomingObjects.FirstOrDefault(obj =>
+                    string.Equals(obj.FieldName, columnName, StringComparison.OrdinalIgnoreCase));
+                if (incomingObject == null)
+                    throw new ArgumentException($"Duplicate check column '{columnName}' was not found in the incoming grid row.");
+
+                string incomingValue = NormalizeGridValue(incomingObject.Value, incomingObject.Text);
+                if (string.IsNullOrEmpty(incomingValue))
+                    continue;
+
+                List<GridDataRowCell> existingCells = grid.Rows
+                    .Select(row => row.Cells.FirstOrDefault(cell =>
+                        string.Equals(cell.Name, columnName, StringComparison.OrdinalIgnoreCase)))
+                    .Where(cell => cell != null)
+                    .ToList();
+
+                if (grid.Rows.Count > 0 && existingCells.Count == 0)
+                    throw new ArgumentException($"Duplicate check column '{columnName}' was not found in the existing target grid rows.");
+
+                bool caseSensitive = caseSensitiveUniqueColumns != null && caseSensitiveUniqueColumns.Any(name =>
+                    string.Equals(name, columnName, StringComparison.OrdinalIgnoreCase));
+                StringComparison comparison = caseSensitive
+                    ? StringComparison.CurrentCulture
+                    : StringComparison.CurrentCultureIgnoreCase;
+
+                bool alreadyExists = existingCells.Any(existingCell => string.Equals(
+                        NormalizeGridValue(existingCell.Value, existingCell.Text),
+                        incomingValue,
+                        comparison));
+
+                if (alreadyExists)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private string NormalizeGridValue(object value, string text)
+        {
+            object candidate = value;
+            if (candidate == null || (candidate is string stringValue && string.IsNullOrWhiteSpace(stringValue)))
+                candidate = text;
+            if (candidate == null)
+                return null;
+
+            if (candidate is JValue jValue)
+                return NormalizeGridValue(jValue.Value, text);
+            if (candidate is JArray jArray && jArray.Count == 1)
+                return NormalizeGridValue(jArray[0], text);
+            if (candidate is JsonElement jsonArray && jsonArray.ValueKind == JsonValueKind.Array && jsonArray.GetArrayLength() == 1)
+                return NormalizeGridValue(jsonArray.EnumerateArray().First(), text);
+            if (candidate is IEnumerable enumerable && !(candidate is string))
+            {
+                List<object> items = enumerable.Cast<object>().ToList();
+                if (items.Count == 1)
+                    return NormalizeGridValue(items[0], text);
+            }
+
+            string serializedValue;
+            if (candidate is JToken token)
+                serializedValue = token.ToString(Newtonsoft.Json.Formatting.None);
+            else if (candidate is JsonElement jsonElement)
+                serializedValue = jsonElement.GetRawText();
+            else if (candidate is string valueString)
+                serializedValue = valueString;
+            else if (candidate is IFormattable formattable)
+                serializedValue = formattable.ToString(null, CultureInfo.InvariantCulture);
+            else
+                serializedValue = candidate.ToJsonString();
+
+            return serializedValue?.Trim();
         }
 
         private Dictionary<string, object> ResolveParametersAgainstParent(Dictionary<string, object> parameters, FormInstance parentFormInstance)

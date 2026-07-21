@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Form, Row, Col, Typography, Segmented, Select, Input, Space, Popover, Divider, Collapse, Tag, Steps, AutoComplete, Badge, Button, Checkbox } from 'antd';
+import { Card, Form, Row, Col, Typography, Segmented, Select, Input, Space, Popover, Divider, Collapse, Tag, Steps, AutoComplete, Badge, Button, Checkbox, Switch } from 'antd';
 import {
     TableOutlined, BuildOutlined, PushpinOutlined, InfoCircleOutlined,
     LinkOutlined, ArrowRightOutlined, GlobalOutlined, SearchOutlined,
@@ -7,6 +7,7 @@ import {
     FormOutlined
 } from '@ant-design/icons';
 import { ParametersList } from './ParametersList';
+import '../../assets/css/MappingFields.css';
 
 import Editor from '@monaco-editor/react';
 
@@ -18,8 +19,10 @@ export const MappingFields = ({
     scopeColumns = [],
     constructInternalUrl,
     fieldPrefix = [], // Array path for nested forms
+    formScopes = [],
     apiStep = 0,
-    setApiStep
+    setApiStep,
+    showDuplicateSetting = false
 }) => {
     // Helper to resolve field name
     const getName = (name) => {
@@ -33,6 +36,49 @@ export const MappingFields = ({
     const lastSearchValues = React.useRef({});
     const inputRefs = React.useRef({});
     const filterCache = React.useRef({ inputValue: null, scopeColumns: null, hasAnyMatch: false, searchVal: '' });
+
+    const normalizedFormScopes = React.useMemo(() => {
+        if (formScopes.length > 0) return formScopes;
+        return [{ key: 'main', label: 'Main Form', path: [], fields: [] }];
+    }, [formScopes]);
+
+    const getScopeByKey = (scopeKey) => (
+        normalizedFormScopes.find(scope => scope.key === scopeKey) || normalizedFormScopes[0]
+    );
+
+    const getScopeValue = (scopeKey) => {
+        const scopeIndex = normalizedFormScopes.findIndex(scope => scope.key === scopeKey);
+        if (scopeIndex <= 0) return 'Main';
+        return scopeIndex === normalizedFormScopes.length - 1 ? 'Current' : `Ancestor:${scopeIndex}`;
+    };
+
+    const getDefaultScope = () => normalizedFormScopes[normalizedFormScopes.length - 1] || normalizedFormScopes[0];
+
+    const getScopeRoleLabel = (scope, index) => {
+        if (index === 0) return 'Main Form';
+        if (index === normalizedFormScopes.length - 1) return `Current Form (${scope.label})`;
+        return `Intermediate Form (${scope.label})`;
+    };
+
+    const getControlBreadcrumb = (scope, fieldName) => (
+        ['Main Form', ...(scope?.path || []), fieldName].filter(Boolean).join(' > ')
+    );
+
+    React.useEffect(() => {
+        const source = formInstance.getFieldValue(getName('source'));
+        if (source !== 'FormControl') return;
+
+        const existingScopeKey = formInstance.getFieldValue(getName('controlScopeKey'));
+
+        if (!existingScopeKey) {
+            const defaultScope = getDefaultScope();
+            formInstance.setFieldValue(getName('controlScopeKey'), defaultScope.key);
+            formInstance.setFieldValue(getName('controlScope'), getScopeValue(defaultScope.key));
+        }
+        if (!formInstance.getFieldValue(getName('controlProperty'))) {
+            formInstance.setFieldValue(getName('controlProperty'), 'Value');
+        }
+    }, [formInstance, normalizedFormScopes]);
 
     const memoizedOptions = React.useMemo(() => {
         return (scopeColumns || [])
@@ -52,7 +98,7 @@ export const MappingFields = ({
     };
 
     const shouldFormUpdate = (prev, curr) => {
-        const fields = ["source", "dataType", "apiType", "apiUrl", "nonEmptyIsTrue", "otherValuesAreFalse", "parameters", "controlName", "controlProperty"];
+        const fields = ["source", "dataType", "apiType", "apiUrl", "nonEmptyIsTrue", "otherValuesAreFalse", "parameters", "controlName", "controlScopeKey", "controlProperty"];
         for (const field of fields) {
             const path = getName(field);
             if (JSON.stringify(getNestedValue(prev, path)) !== JSON.stringify(getNestedValue(curr, path))) {
@@ -159,26 +205,32 @@ export const MappingFields = ({
                 boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
                 marginBottom: 16
             }}>
-                <Row gutter={16} align="middle">
-                    <Col span={11}>
+                <Row gutter={16} align="bottom">
+                    <Col span={10}>
                         <Form.Item
                             name={getName("source")}
                             label={<Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mapping Mode</Text>}
                             style={{ marginBottom: 0 }}
                         >
-                            <Segmented
-                                options={[
-                                    { label: 'Excel', value: 'Excel', icon: <TableOutlined /> },
-                                    { label: 'API', value: 'API', icon: <BuildOutlined /> },
-                                    { label: 'Fixed', value: 'Fixed', icon: <PushpinOutlined /> },
-                                    { label: 'Form Field', value: 'FormControl', icon: <FormOutlined /> }
-                                ]}
-                                block
+                            <Select
+                                className="mapping-mode-select"
                                 size="middle"
-                                style={{ height: 32, display: 'flex', alignItems: 'center' }}
+                                variant="filled"
+                                options={[
+                                    { label: 'Excel Column', value: 'Excel' },
+                                    { label: 'API Lookup', value: 'API' },
+                                    { label: 'Fixed Value', value: 'Fixed' },
+                                    { label: 'Form Field', value: 'FormControl' }
+                                ]}
                                 onChange={(val) => {
                                     const path = getName("source");
                                     formInstance.setFieldValue(path, val);
+                                    if (val === 'FormControl' && !formInstance.getFieldValue(getName('controlScopeKey'))) {
+                                        const defaultScope = getDefaultScope();
+                                        formInstance.setFieldValue(getName('controlScopeKey'), defaultScope.key);
+                                        formInstance.setFieldValue(getName('controlScope'), getScopeValue(defaultScope.key));
+                                        formInstance.setFieldValue(getName('controlProperty'), 'Value');
+                                    }
                                 }}
                             />
                         </Form.Item>
@@ -222,7 +274,7 @@ export const MappingFields = ({
                             />
                         </Form.Item>
                     </Col>
-                    <Col span={7}>
+                    <Col span={8}>
                         <Form.Item
                             name={getName("dataType")}
                             label={<Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Type</Text>}
@@ -636,34 +688,64 @@ export const MappingFields = ({
 
                             {/* 3. Source: FORM CONTROL MODE */}
                             {sourceState === 'FormControl' && (
-                                <div style={{
-                                    animation: 'fadeIn 0.2s',
-                                    background: '#f7fffb',
-                                    padding: '12px 14px',
-                                    borderRadius: '12px',
-                                    borderTop: '4px solid #10b981',
-                                    border: '1px solid #d1fae5'
-                                }}>
-                                    <Row gutter={16}>
-                                        <Col span={16}>
+                                <div className="form-source-panel">
+                                    <div className="form-source-heading">
+                                        <span className="form-source-icon"><FormOutlined /></span>
+                                        <div>
+                                            <Text strong>Define a form reference</Text>
+                                            <Text type="secondary">Select the form level, then enter the CSP object name.</Text>
+                                        </div>
+                                    </div>
+                                    <Row gutter={[12, 12]} align="top">
+                                        <Col xs={24} md={8}>
                                             <Form.Item
-                                                name={getName("controlName")}
-                                                label={<Text strong style={{ fontSize: 12, color: '#065f46' }}>Source Form Field</Text>}
-                                                rules={[{ required: true, message: 'Please enter source form field' }]}
-                                                help={<Text type="secondary" style={{ fontSize: 10 }}>Reads from the live CSP form instance after fields are applied.</Text>}
+                                                name={getName("controlScopeKey")}
+                                                label={<Text strong className="form-source-label">Source Form</Text>}
+                                                rules={[{ required: true, message: 'Please select source form' }]}
                                                 style={{ marginBottom: 0 }}
                                             >
-                                                <Input placeholder="e.g. dmDocumentNo" prefix={<FormOutlined style={{ color: '#10b981' }} />} />
+                                                <Select
+                                                    className="form-source-select"
+                                                    placeholder="Select form"
+                                                    disabled={normalizedFormScopes.length === 1}
+                                                    options={normalizedFormScopes.map((scope, index) => ({
+                                                        value: scope.key,
+                                                        label: (
+                                                            <span className="form-scope-option">
+                                                                <span>{getScopeRoleLabel(scope, index)}</span>
+                                                                <small>{index === 0 ? 'Root' : index === normalizedFormScopes.length - 1 ? 'Current' : `Level ${index}`}</small>
+                                                            </span>
+                                                        )
+                                                    }))}
+                                                    onChange={(scopeKey) => {
+                                                        formInstance.setFieldValue(getName('controlScope'), getScopeValue(scopeKey));
+                                                    }}
+                                                />
                                             </Form.Item>
                                         </Col>
-                                        <Col span={8}>
+                                        <Col xs={24} md={10}>
+                                            <Form.Item
+                                                name={getName("controlName")}
+                                                label={<Text strong className="form-source-label">Control / Object Name</Text>}
+                                                rules={[{ required: true, message: 'Please enter source control name' }]}
+                                                style={{ marginBottom: 0 }}
+                                            >
+                                                <Input
+                                                    className="form-source-control-input"
+                                                    placeholder="e.g. dmDocumentNo"
+                                                />
+                                            </Form.Item>
+                                        </Col>
+                                        <Col xs={24} md={6}>
+                                            <Form.Item name={getName("controlScope")} hidden><Input /></Form.Item>
                                             <Form.Item
                                                 name={getName("controlProperty")}
-                                                label={<Text strong style={{ fontSize: 12, color: '#065f46' }}>Property</Text>}
+                                                label={<Text strong className="form-source-label">Property</Text>}
                                                 initialValue="Value"
                                                 style={{ marginBottom: 0 }}
                                             >
                                                 <Select
+                                                    className="form-source-select"
                                                     options={[
                                                         { label: 'Value', value: 'Value' },
                                                         { label: 'Text', value: 'Text' }
@@ -672,6 +754,18 @@ export const MappingFields = ({
                                             </Form.Item>
                                         </Col>
                                     </Row>
+                                    <Form.Item shouldUpdate noStyle>
+                                        {({ getFieldValue }) => {
+                                            const scope = getScopeByKey(getFieldValue(getName('controlScopeKey')));
+                                            const field = getFieldValue(getName('controlName'));
+                                            return (
+                                                <div className="form-source-path">
+                                                    <span>Selected path</span>
+                                                    <strong>{field ? getControlBreadcrumb(scope, field) : 'Select a form and field'}</strong>
+                                                </div>
+                                            );
+                                        }}
+                                    </Form.Item>
                                 </div>
                             )}
 
@@ -719,12 +813,8 @@ export const MappingFields = ({
                 padding: '10px 14px',
                 borderRadius: '10px',
                 background: '#f8fafc',
-                border: '1px solid #e2e8f0',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 12
+                border: '1px solid #e2e8f0'
             }}>
-                <Badge status="processing" color="#1677ff" />
                 <Form.Item shouldUpdate noStyle>
                     {({ getFieldValue }) => {
                         const src = getFieldValue(getName('source'));
@@ -735,9 +825,37 @@ export const MappingFields = ({
                         const isArray = getFieldValue(getName('isArray'));
 
                         return (
-                            <div style={{ flex: 1, lineHeight: '1.6' }}>
-                                <Text strong style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', display: 'block', marginBottom: 2 }}>Active Preview / Mapping logic</Text>
-                                {src === 'Excel' ? (
+                            <div style={{ lineHeight: '1.6' }}>
+                                {showDuplicateSetting && (
+                                    <>
+                                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '1px 2px' }}>
+                                            <div>
+                                                <Text strong style={{ display: 'block', fontSize: 11, color: '#475569' }}>Prevent duplicate grid rows</Text>
+                                                <Text type="secondary" style={{ display: 'block', fontSize: 10 }}>Skip the new row when this column value already exists.</Text>
+                                            </div>
+                                            <Form.Item name={getName('skipIfDuplicate')} valuePropName="checked" noStyle>
+                                                <Switch size="small" />
+                                            </Form.Item>
+                                        </div>
+                                        {getFieldValue(getName('skipIfDuplicate')) === true && (
+                                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, padding: '6px 2px 1px 14px' }}>
+                                                <div>
+                                                    <Text style={{ display: 'block', fontSize: 10, color: '#64748b' }}>Case-sensitive comparison</Text>
+                                                    <Text type="secondary" style={{ display: 'block', fontSize: 9 }}>When enabled, uppercase and lowercase values are treated as different.</Text>
+                                                </div>
+                                                <Form.Item name={getName('duplicateCaseSensitive')} valuePropName="checked" noStyle>
+                                                    <Switch size="small" />
+                                                </Form.Item>
+                                            </div>
+                                        )}
+                                        <Divider style={{ margin: '8px 0', borderColor: '#e2e8f0' }} />
+                                    </>
+                                )}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                    <Badge status="processing" color="#1677ff" />
+                                    <div style={{ flex: 1 }}>
+                                        <Text strong style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', display: 'block', marginBottom: 2 }}>Active Preview / Mapping logic</Text>
+                                        {src === 'Excel' ? (
                                     <Text style={{ fontSize: 12, color: '#334155' }}>
                                         {isArray ? (
                                             <span>
@@ -775,10 +893,12 @@ export const MappingFields = ({
                                     </Text>
                                 ) : src === 'FormControl' ? (
                                     <Text style={{ fontSize: 12, color: '#334155' }}>
-                                        Reads <Tag color="green" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{getFieldValue(getName('controlName')) || '???'}</Tag>
+                                        Reads <Tag color="green" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{getFieldValue(getName('controlName')) ? getControlBreadcrumb(getScopeByKey(getFieldValue(getName('controlScopeKey'))), getFieldValue(getName('controlName'))) : '???'}</Tag>
                                         {'.'}{getFieldValue(getName('controlProperty')) || 'Value'} from the CSP form instance.
                                     </Text>
                                 ) : null}
+                                    </div>
+                                </div>
                             </div>
                         );
                     }}

@@ -27,6 +27,15 @@ namespace Systek_SynergyCSPRelay.Controllers
         }
 
         [HttpPost]
+        [ActionName("Capabilities")]
+        [NoRequestHeaders]
+        [NoResponseHeaders]
+        public IActionResult Capabilities()
+        {
+            return Ok(new { UniqueGridColumns = true });
+        }
+
+        [HttpPost]
         [ActionName("CreateFlow")]
         [NoRequestHeaders]
         [NoResponseHeaders]

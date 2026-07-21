@@ -13,7 +13,7 @@ const { Option } = Select;
 
 
 // --- Main Modal ---
-export const ParametersModal = ({ visible, onCancel, onSave, initialValues, excelColumns, constructInternalUrl, sheets, sheetColumns, currentColumns, hideFlowParams = false, showInherit = true }) => {
+export const ParametersModal = ({ visible, onCancel, onSave, initialValues, excelColumns, constructInternalUrl, sheets, sheetColumns, currentColumns, formScopes = [], hideFlowParams = false, showInherit = true }) => {
     const [form] = Form.useForm();
 
     // State for the sub-modal
@@ -484,6 +484,7 @@ export const ParametersModal = ({ visible, onCancel, onSave, initialValues, exce
                 type={currentType}
                 sheetColumns={sheetColumns}
                 currentColumns={currentColumns}
+                formScopes={formScopes}
                 title="Configure Parameter Mapping"
                 width={750}
                 zIndex={1010}

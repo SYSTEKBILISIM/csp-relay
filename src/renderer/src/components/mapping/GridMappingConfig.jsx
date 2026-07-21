@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Form, Row, Col, Select, Input, Typography, Table, Space, Button, Tooltip, Tag, Modal, Switch, message } from 'antd';
+import { Form, Row, Col, Select, Input, Typography, Table, Space, Button, Tooltip, Tag, Modal, message } from 'antd';
 import {
     LinkOutlined, BuildOutlined, TableOutlined, PlusOutlined,
     DeleteOutlined, SettingOutlined, ArrowUpOutlined, ArrowDownOutlined,
@@ -12,8 +12,18 @@ import { ResizableTitle } from '../ResizableTitle';
 
 const { Text } = Typography;
 const { Option } = Select;
+const EMPTY_GRID_COLUMNS = [];
 
-export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumns = {}, excelColumns = [], constructInternalUrl }) => {
+export const GridMappingConfig = ({
+    form,
+    type,
+    currentColumns = [],
+    sheetColumns = {},
+    excelColumns = [],
+    constructInternalUrl,
+    ancestorScopes = [],
+    formName = 'Current Form'
+}) => {
     const [isColumnModalVisible, setIsColumnModalVisible] = useState(false);
     const [activeColumnIndex, setActiveColumnIndex] = useState(null);
     const [columnForm] = Form.useForm();
@@ -25,6 +35,25 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
 
     const [colWidths, setColWidths] = useState({ sort: 50, name: 160, type: 180, source: 180, action: 90 });
     const [draggedOverIndex, setDraggedOverIndex] = useState(-1);
+    const watchedGridColumns = Form.useWatch('gridColumns', form) || EMPTY_GRID_COLUMNS;
+
+    const formScopes = React.useMemo(() => {
+        const parentPath = ancestorScopes[ancestorScopes.length - 1]?.path || [];
+        const currentPath = [...parentPath, formName].filter(Boolean);
+        const fields = watchedGridColumns.filter(column => (
+            column?.name && column.type !== 'InlineGrid' && column.type !== 'RelatedGrid'
+        ));
+
+        return [
+            ...ancestorScopes,
+            {
+                key: `form:${currentPath.join('>') || 'current'}`,
+                label: formName || 'Current Form',
+                path: currentPath,
+                fields
+            }
+        ];
+    }, [ancestorScopes, formName, watchedGridColumns]);
 
     const handleResize = key => (e, { size }) => {
         setColWidths(prev => ({ ...prev, [key]: size.width }));
@@ -55,7 +84,9 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
         setApiStep(0);
         columnForm.setFieldsValue({
             isArray: false,
-            ...mapping
+            ...mapping,
+            skipIfDuplicate: mapping.skipIfDuplicate === true || columnData.skipIfDuplicate === true,
+            duplicateCaseSensitive: mapping.duplicateCaseSensitive === true || columnData.duplicateCaseSensitive === true
         });
         setIsColumnModalVisible(true);
     };
@@ -108,6 +139,37 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
             // Save values individually inside Form.List row structure to prevent Form.List reconciliation from wiping it out
             form.setFieldValue(['gridColumns', activeColumnIndex, 'mapping'], values);
             form.setFieldValue(['gridColumns', activeColumnIndex, 'dataType'], values.dataType);
+            form.setFieldValue(['gridColumns', activeColumnIndex, 'skipIfDuplicate'], values.skipIfDuplicate === true);
+            form.setFieldValue(['gridColumns', activeColumnIndex, 'duplicateCaseSensitive'], values.duplicateCaseSensitive === true);
+
+            const updatedGridColumns = (form.getFieldValue('gridColumns') || []).map((column, index) => (
+                index === activeColumnIndex
+                    ? {
+                        ...column,
+                        mapping: values,
+                        skipIfDuplicate: values.skipIfDuplicate === true,
+                        duplicateCaseSensitive: values.duplicateCaseSensitive === true
+                    }
+                    : column
+            ));
+            form.setFieldValue(
+                'duplicateCheckColumns',
+                updatedGridColumns
+                    .filter(column => column?.name && (
+                        column?.skipIfDuplicate === true || column?.mapping?.skipIfDuplicate === true
+                    ))
+                    .map(column => column.name)
+            );
+            form.setFieldValue(
+                'duplicateCaseSensitiveColumns',
+                updatedGridColumns
+                    .filter(column => column?.name && (
+                        column?.skipIfDuplicate === true || column?.mapping?.skipIfDuplicate === true
+                    ) && (
+                        column?.duplicateCaseSensitive === true || column?.mapping?.duplicateCaseSensitive === true
+                    ))
+                    .map(column => column.name)
+            );
 
             const currentType = form.getFieldValue(['gridColumns', activeColumnIndex, 'type']);
             if (values.type || !currentType) {
@@ -121,6 +183,12 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
 
     return (
         <div style={{ animation: 'fadeIn 0.3s', padding: '0' }}>
+            <Form.Item name="duplicateCheckColumns" hidden>
+                <div />
+            </Form.Item>
+            <Form.Item name="duplicateCaseSensitiveColumns" hidden>
+                <div />
+            </Form.Item>
             {/* JOIN CONFIGURATION - PREMIUM STYLE */}
             <div style={{
                 marginBottom: 24,
@@ -268,6 +336,12 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                         <Form.Item name={[field.name, 'dataType']} hidden>
                                             <div />
                                         </Form.Item>
+                                        <Form.Item name={[field.name, 'skipIfDuplicate']} hidden>
+                                            <div />
+                                        </Form.Item>
+                                        <Form.Item name={[field.name, 'duplicateCaseSensitive']} hidden>
+                                            <div />
+                                        </Form.Item>
                                         <Form.Item name={[field.name, 'name']} rules={[{ required: true, message: 'Please enter Field Name' }]} style={{ marginBottom: 0 }}>
                                             <Input placeholder="Column Name" size="small" variant="filled" className="input-sm-fixed" style={{ fontWeight: 500 }} />
                                         </Form.Item>
@@ -348,6 +422,10 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                                             </Tooltip>
                                                         )
                                                         : <Tag color="warning" style={{ margin: 0 }}>Fixed Needed</Tag>;
+                                                } else if (mapping.source === 'FormControl') {
+                                                    summaryNode = mapping.controlName
+                                                        ? <Tag color="green" style={{ margin: 0 }}>Form: {mapping.controlName}</Tag>
+                                                        : <Tag color="warning" style={{ margin: 0 }}>Form Field Needed</Tag>;
                                                 } else {
                                                     summaryNode = mapping.valueCol
                                                         ? (
@@ -380,6 +458,7 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                         ((colData.type === 'InlineGrid' || colData.type === 'RelatedGrid') && mapping.gridColumns?.length > 0) ||
                                         (mapping.source === 'API' && mapping.apiUrl) ||
                                         (mapping.source === 'Fixed' && mapping.fixedValue) ||
+                                        (mapping.source === 'FormControl' && mapping.controlName) ||
                                         (mapping.source === 'Excel' && mapping.valueCol)
                                     );
 
@@ -546,6 +625,7 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                         sheets={Object.keys(sheetColumns)}
                         sheetColumns={sheetColumns}
                         currentColumns={gridSheetColumns}
+                        formScopes={formScopes}
                         hideFlowParams={true}
                     />
                 );
@@ -585,6 +665,8 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                     sheetColumns={sheetColumns}
                                     excelColumns={excelColumns}
                                     constructInternalUrl={constructInternalUrl}
+                                    ancestorScopes={formScopes}
+                                    formName={form.getFieldValue(['gridColumns', activeColumnIndex, 'name']) || 'Nested Form'}
                                 />
                             );
                         }
@@ -609,8 +691,10 @@ export const GridMappingConfig = ({ form, type, currentColumns = [], sheetColumn
                                     formInstance={columnForm}
                                     scopeColumns={gridSheetColumns}
                                     constructInternalUrl={constructInternalUrl}
+                                    formScopes={formScopes}
                                     apiStep={apiStep}
                                     setApiStep={setApiStep}
+                                    showDuplicateSetting
                                 />
                             );
                         })();

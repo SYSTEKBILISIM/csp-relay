@@ -95,6 +95,7 @@ export const TransferScreen = ({ onFinish, initialData }) => {
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [currentObjectKey, setCurrentObjectKey] = useState(null);
     const [currentObjectType, setCurrentObjectType] = useState('Object');
+    const [currentObjectName, setCurrentObjectName] = useState('');
     const [currentObjectMapping, setCurrentObjectMapping] = useState(null);
     const [valueSource, setValueSource] = useState('Excel'); // 'Excel' or 'API'
 
@@ -336,6 +337,7 @@ export const TransferScreen = ({ onFinish, initialData }) => {
     const openMappingModal = (record) => {
         setCurrentObjectKey(record.key);
         setCurrentObjectType(record.type); // Store current type (InlineGrid or Object)
+        setCurrentObjectName(record.name || 'Current Form');
 
         const existingMap = record.mapping;
         const mapping = existingMap || {
@@ -466,6 +468,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                 </Tooltip>
                             )
                             : <Tag color="warning" style={{ margin: 0 }}>Fixed: Enter Value</Tag>;
+                    } else if (mapping.source === 'FormControl') {
+                        summaryNode = mapping.controlName
+                            ? <Tag color="green" style={{ margin: 0 }}>Form: {mapping.controlName}</Tag>
+                            : <Tag color="warning" style={{ margin: 0 }}>Form Field Needed</Tag>;
                     } else {
                         summaryNode = mapping.valueCol
                             ? (
@@ -829,6 +835,8 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                     type={currentObjectType}
                     sheetColumns={sheetColumns}
                     currentColumns={currentColumns}
+                    mainFormFields={objects.map(({ name, type }) => ({ name, type }))}
+                    currentFormName={currentObjectName}
                     title="Configure Object Mapping"
                     width={950}
                 />

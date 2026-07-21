@@ -347,7 +347,8 @@
 .input-sm-fixed {
     font-size: 11px;
     height: 22px;
-    padding: 0 6px;
+    line-height: 20px;
+    padding: 1px 6px;
 }
 
 .select-sm-fixed {
@@ -362,8 +363,9 @@
 .ant-input-affix-wrapper-sm {
     height: 32px !important;
     min-height: 32px !important;
-    padding: 0 10px !important;
+    padding: 4px 10px !important;
     font-size: 13px !important;
+    line-height: 22px !important;
     display: flex !important;
     align-items: center !important;
     box-sizing: border-box !important;
@@ -376,7 +378,8 @@
     background: transparent !important;
     border: none !important;
     padding: 0 !important;
-    height: auto !important;
+    height: 22px !important;
+    line-height: 22px !important;
 }
 
 .mapping-autocomplete .ant-select-selector {
@@ -404,7 +407,7 @@
 }
 
 .ant-select-sm .ant-select-selection-item {
-    line-height: normal !important;
+    line-height: 22px !important;
     display: flex !important;
     align-items: center !important;
     height: 100% !important;

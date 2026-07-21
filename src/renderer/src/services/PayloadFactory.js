@@ -20,6 +20,8 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
             inlineGridsArray.push({
                 FieldName: obj.FieldName,
                 WriteMode: obj.WriteMode || 'Append',
+                UniqueColumns: obj.UniqueColumns || [],
+                CaseSensitiveUniqueColumns: obj.CaseSensitiveUniqueColumns || [],
                 Rows: obj.Rows || []
             });
         } else if (obj.Type === 'RelatedGrid') {
@@ -29,6 +31,8 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
                 FormName: obj.FormName,
                 DocumentIdColumnName: obj.DocumentIdColumnName,
                 WriteMode: obj.WriteMode || 'Append',
+                UniqueColumns: obj.UniqueColumns || [],
+                CaseSensitiveUniqueColumns: obj.CaseSensitiveUniqueColumns || [],
                 Rows: obj.Rows || []
             });
         } else if (obj.Type === 'RelatedDocument') {

@@ -9,6 +9,8 @@ namespace Ataven.Models
         public string FormName { get; set; }
         public string DocumentIdColumnName { get; set; }
         public string WriteMode { get; set; } = "Append";
+        public List<string> UniqueColumns { get; set; } = new List<string>();
+        public List<string> CaseSensitiveUniqueColumns { get; set; } = new List<string>();
         public List<RelatedGridRowModel> Rows { get; set; }
     }
 }
