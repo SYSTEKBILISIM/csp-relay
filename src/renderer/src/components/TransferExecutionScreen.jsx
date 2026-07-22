@@ -967,23 +967,23 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     </div>
                     <div className="execution-timing-grid">
                         <div className="execution-time-stat">
-                            <div className="execution-time-label">Start Time</div>
+                            <div className="execution-time-label">Started</div>
                             <div className="execution-time-value"><ExecutionDateValue timestamp={executionTiming.startedAt} /></div>
                         </div>
                         <div className="execution-time-stat">
-                            <div className="execution-time-label">Finish Time</div>
+                            <div className="execution-time-label">Finished</div>
                             <div className="execution-time-value"><ExecutionDateValue timestamp={executionTiming.endedAt} /></div>
                         </div>
                         <div className="execution-time-stat">
-                            <div className="execution-time-label">Estimated Remaining</div>
+                            <div className="execution-time-label">Remaining</div>
                             <div className="execution-time-value">{estimatedTime || '-'}</div>
                         </div>
                         <div className="execution-time-stat">
-                            <div className="execution-time-label">Estimated Finish Time</div>
+                            <div className="execution-time-label">Est. Finish</div>
                             <div className="execution-time-value"><ExecutionDateValue timestamp={estimatedFinishAt} /></div>
                         </div>
                         <div className="execution-time-stat">
-                            <div className="execution-time-label">Total Duration</div>
+                            <div className="execution-time-label">Elapsed</div>
                             <div className="execution-time-value">{executionTiming.startedAt ? formatElapsedTime(executionTiming.elapsedMs) : '-'}</div>
                         </div>
                     </div>
