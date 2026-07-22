@@ -269,6 +269,20 @@ namespace Ataven.Managers
             }
         }
 
+        private void RestoreTypedSelectionValue(Control control, object value)
+        {
+            if (control == null || value == null || value is string || control.GetGroup() != "Items")
+                return;
+
+            JArray items = control.GetPropertyValue<JArray>("items");
+            JObject selectedItem = items?
+                .OfType<JObject>()
+                .FirstOrDefault(item => item.Value<bool?>("selected") == true);
+
+            if (selectedItem != null)
+                selectedItem["value"] = JToken.FromObject(value);
+        }
+
         private void SetObjects(FormInstance formInstance, List<ObjectModel> objects)
         {
             foreach (var obj in objects)
@@ -297,7 +311,10 @@ namespace Ataven.Managers
                     if (!string.IsNullOrWhiteSpace(normalizedText))
                         formInstance.Controls[obj.FieldName].Text = normalizedText;
                     if (normalizedValue != null && (!(normalizedValue is string strValueObject) || !string.IsNullOrWhiteSpace(strValueObject)))
+                    {
                         formInstance.Controls[obj.FieldName].Value = normalizedValue;
+                        RestoreTypedSelectionValue(formInstance.Controls[obj.FieldName], normalizedValue);
+                    }
                 }
                 catch (Exception ex)
                 {
