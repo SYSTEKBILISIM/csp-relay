@@ -1,5 +1,5 @@
-import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker } from 'electron'
-import { join } from 'path'
+import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker, dialog } from 'electron'
+import { dirname, join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 
 // Disable background throttling to ensure high performance during transfers
@@ -10,6 +10,7 @@ app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 import { readFileSync } from 'fs'
 import { basename, extname } from 'path'
 import mime from 'mime-types'; // Added dynamic MIME type lookup
+import { TransferLogStore } from './transferLogStore'
 
 import icon from '../../resources/icon.png?asset'
 
@@ -57,6 +58,7 @@ function createWindow() {
 
 // Global Store in Main Process
 const globalBackendStore = {};
+const transferLogStore = new TransferLogStore(is.dev ? app.getAppPath() : dirname(app.getPath('exe')))
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
@@ -64,6 +66,38 @@ const globalBackendStore = {};
 app.whenReady().then(() => {
     // Prevent the OS from suspending the app or entering deep sleep
     powerSaveBlocker.start('prevent-app-suspension');
+
+    const transferLogReady = transferLogStore.ensureDirectory(app.getPath('userData')).catch(error => {
+        console.error('[Main] Transfer log directory could not be initialized:', error)
+        throw error
+    })
+
+    ipcMain.handle('transfer-log:reset', async () => {
+        await transferLogReady
+        return transferLogStore.reset()
+    })
+    ipcMain.handle('transfer-log:append', async (_event, { key, data }) => {
+        await transferLogReady
+        return transferLogStore.append(key, data)
+    })
+    ipcMain.handle('transfer-log:get', async (_event, key) => {
+        await transferLogReady
+        return transferLogStore.get(key)
+    })
+    ipcMain.handle('transfer-log:path', async () => {
+        await transferLogReady
+        return transferLogStore.filePath
+    })
+    ipcMain.handle('transfer-log:export-json', async (_event, { metadata, suggestedName }) => {
+        await transferLogReady
+        const result = await dialog.showSaveDialog({
+            title: 'Export Transfer Logs',
+            defaultPath: join(app.getPath('downloads'), suggestedName || `Full_Transfer_Logs_${Date.now()}.json`),
+            filters: [{ name: 'JSON Files', extensions: ['json'] }]
+        })
+        if (result.canceled || !result.filePath) return { success: false, canceled: true }
+        return transferLogStore.exportJson(result.filePath, metadata)
+    })
 
     // Set app user model id for windows
     electronApp.setAppUserModelId('com.electron')

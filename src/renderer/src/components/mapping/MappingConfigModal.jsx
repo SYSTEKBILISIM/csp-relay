@@ -42,7 +42,8 @@ export const MappingConfigModal = ({
                 form.setFieldsValue({
                     isArray: false,
                     gridWriteMode: 'Append',
-                    ...initialValues
+                    ...initialValues,
+                    cacheApiResponse: initialValues.cacheApiResponse !== false
                 });
             } else {
                 // Default values if new or empty
@@ -55,7 +56,8 @@ export const MappingConfigModal = ({
                     responsePath: 'result.result',
                     gridColumns: [],
                     gridWriteMode: 'Append',
-                    ...initialValues 
+                    ...initialValues,
+                    cacheApiResponse: initialValues?.cacheApiResponse !== false
                 });
             }
         }

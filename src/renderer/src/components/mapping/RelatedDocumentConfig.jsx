@@ -7,7 +7,7 @@ const { Option } = Select;
 
 /**
  * Config UI for RelatedDocument type objects.
- * The user selects which Excel column contains the file path for this row.
+ * The user selects which Excel column contains the local file path and optional CSP save path for this row.
  * At execution time, the app reads the file and sends Name, Extension, Data (base64).
  */
 export const RelatedDocumentConfig = ({ form, excelColumns = [] }) => {
@@ -20,7 +20,7 @@ export const RelatedDocumentConfig = ({ form, excelColumns = [] }) => {
 
             <Alert
                 message="File Path Column"
-                description="Select the Excel column that contains the absolute file path for each row. The file will be read at transfer time and sent as Name, Extension, and Data (base64)."
+                description="Select the Excel column that contains the absolute local file path for each row. Optionally select a CSP save path column when the document must be uploaded under a dynamic folder."
                 type="info"
                 showIcon
                 style={{ marginBottom: 20, fontSize: 12 }}
@@ -30,10 +30,29 @@ export const RelatedDocumentConfig = ({ form, excelColumns = [] }) => {
                 name="pathCol"
                 label={<span style={{ fontWeight: 600 }}>File Path Column</span>}
                 rules={[{ required: true, message: 'Please select File Path Column' }]}
-                style={{ marginBottom: 0 }}
+                style={{ marginBottom: 16 }}
             >
                 <Select
                     placeholder="Select Excel column containing file path..."
+                    showSearch
+                    optionFilterProp="children"
+                    style={{ width: '100%' }}
+                >
+                    {(excelColumns || []).filter(col => col !== undefined && col !== null && col !== '').map(col => (
+                        <Option key={col} value={col}>{col}</Option>
+                    ))}
+                </Select>
+            </Form.Item>
+
+            <Form.Item
+                name="savePathCol"
+                label={<span style={{ fontWeight: 600 }}>Save Path Column</span>}
+                help={<Text type="secondary" style={{ fontSize: 11 }}>Optional. Example: DOCUMENTS/ABC</Text>}
+                style={{ marginBottom: 0 }}
+            >
+                <Select
+                    allowClear
+                    placeholder="Optional CSP folder path column..."
                     showSearch
                     optionFilterProp="children"
                     style={{ width: '100%' }}

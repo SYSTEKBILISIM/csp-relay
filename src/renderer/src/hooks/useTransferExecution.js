@@ -4,7 +4,6 @@ import { globalStore } from '../store/GlobalStore';
 import { processRowAndExecute } from '../services/TransferService';
 import { logDB } from '../services/IndexedDBService';
 
-const MAX_DETAIL_LOGS = 500;
 const DEFAULT_WORK_UNITS = 1;
 const PARALLEL_ROW_LIMIT = 5;
 
@@ -50,6 +49,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     });
     const [logs, setLogs] = useState([]);
     const [estimatedTime, setEstimatedTime] = useState(null);
+    const [estimatedFinishAt, setEstimatedFinishAt] = useState(null);
     const [executionMode, _setExecutionMode] = useState('sequential');
     const executionModeRef = useRef('sequential');
     const [executionTiming, setExecutionTiming] = useState({
@@ -160,6 +160,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             
             setStats({ total: initialKeys.length, processed: 0, success: 0, error: 0 });
             setProgress(0);
+            setEstimatedTime(null);
+            setEstimatedFinishAt(null);
             setIsComplete(false);
             // Clear IndexedDB for a fresh start
             logDB.clearAll().catch(console.error);
@@ -302,6 +304,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             const startedAt = Date.now();
             executionTimingRef.current = { startedAt, endedAt: null };
             setExecutionTiming({ startedAt, endedAt: null, elapsedMs: 0 });
+            setEstimatedTime(null);
+            setEstimatedFinishAt(null);
             apiCache.current = new Map();
         } else {
             executionTimingRef.current.endedAt = null;
@@ -343,8 +347,10 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 const minutes = Math.floor(estSecs / 60);
                 const seconds = Math.round(estSecs % 60);
                 setEstimatedTime(minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`);
+                setEstimatedFinishAt(Date.now() + Math.max(0, estSecs * 1000));
             } else {
                 setEstimatedTime('0s');
+                setEstimatedFinishAt(Date.now());
             }
         };
 
@@ -365,13 +371,14 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             activeLog.status = 'Processing';
             activeLog.message = 'Resolving fields and executing flow...';
             refreshExecutionState(true);
+            let detailObj;
 
             try {
                 const result = await processRowAndExecute(rowData, definitionData, globalStore, apiCache.current, allSheetsData.current);
                 const duration = Date.now() - iterStart;
                 activeLog.workUnits = getExecutionWorkUnits(result.executionLog);
 
-                const detailObj = {
+                detailObj = {
                     payload: result.payload,
                     response: cleanJson(result.response),
                     executionLog: (result.executionLog || []).map(step => ({
@@ -384,12 +391,6 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                     warnings: result.warnings || []
                 };
 
-                try {
-                    await logDB.saveDetail(currentLog.key, detailObj);
-                } catch (e) {
-                    console.error('IndexedDB Save Error:', e);
-                }
-
                 activeLog.status = result.status;
                 activeLog.message = result.message;
                 activeLog.duration = `${duration}ms`;
@@ -401,18 +402,12 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 const duration = Date.now() - iterStart;
                 const errMsg = err.message || 'Unknown Error';
                 const isValidation = err.isValidationError === true;
-                const detailObj = {
+                detailObj = {
                     payload: err.failedPayload ? JSON.stringify(err.failedPayload, null, 2) : 'Error constructing payload or executing flow',
                     response: cleanJson(err.rawResponse || errMsg),
                     executionLog: [],
                     warnings: []
                 };
-
-                try {
-                    await logDB.saveDetail(currentLog.key, detailObj);
-                } catch (e) {
-                    console.error('IndexedDB Save Error:', e);
-                }
 
                 activeLog.status = isValidation ? 'ValidationError' : 'Error';
                 activeLog.message = errMsg;
@@ -421,6 +416,12 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 activeLog.workUnits = getExecutionWorkUnits(detailObj.executionLog);
                 sessionDurationAccumulator += duration;
                 sessionWorkUnitsAccumulator += activeLog.workUnits;
+            }
+
+            try {
+                await logDB.saveDetail(currentLog.key, detailObj, { ...activeLog }, rowData);
+            } catch (e) {
+                console.error('File Log Save Error:', e);
             }
 
             sessionProcessedCount += 1;
@@ -535,6 +536,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setStats({ total: resetLogs.length, processed: 0, success: 0, error: 0 });
         setProgress(0);
         setEstimatedTime(null);
+        setEstimatedFinishAt(null);
         executionTimingRef.current = { startedAt: null, endedAt: null };
         setExecutionTiming({ startedAt: null, endedAt: null, elapsedMs: 0 });
         setIsComplete(false);
@@ -579,6 +581,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         stats,
         logs,
         estimatedTime,
+        estimatedFinishAt,
         executionMode,
         setExecutionMode,
         executionTiming,

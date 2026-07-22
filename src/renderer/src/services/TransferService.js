@@ -204,11 +204,14 @@ async function fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, respo
  * @param {string} baseUrl  - base Transfer API URL (without trailing slash)
  * @param {object} headers  - common auth headers (Authorization, bimser-encrypted-data, bimser-language)
  * @param {object} fileInfo - { name, contentType, size, buffer } from readFileAsBuffer
- * @param {string} category - The mapping category / path config value (e.g. "DOCUMENTS")
+ * @param {string} targetPath - The full target folder path (e.g. "DOCUMENTS/ENVRA/FIRMALAR")
+ * @param {string} category - RelatedDocuments category/library caption (e.g. "DOCUMENTS")
  * @param {object} executionLog - shared execution log array for diagnostics
  */
-async function uploadFileInParts(baseUrl, headers, fileInfo, category, executionLog) {
+async function uploadFileInParts(baseUrl, headers, fileInfo, targetPath, category, executionLog) {
     const { name, contentType, size, buffer } = fileInfo;
+    const normalizedTargetPath = normalizeDocumentTargetPath(targetPath);
+    const resolvedCategory = category || (normalizedTargetPath ? getDocumentPathLibrary(normalizedTargetPath) : null);
 
     // ── Step 1: CreateFileParts ──────────────────────────────────────────────
     const createLog = {
@@ -222,10 +225,12 @@ async function uploadFileInParts(baseUrl, headers, fileInfo, category, execution
     const createBody = {
         Name: name,
         Description: name,
-        Path: category,
         DataLength: size,
         ContentType: contentType
     };
+    if (normalizedTargetPath) {
+        createBody.Path = normalizedTargetPath;
+    }
 
     const createRes = await fetchWithRetry(`${baseUrl}/CreateFileParts`, {
         method: 'POST',
@@ -351,9 +356,49 @@ async function uploadFileInParts(baseUrl, headers, fileInfo, category, execution
     // ── Result: return descriptor for the final payload ──────────────────────
     return {
         FileSecretKey: fileSecretKey,
-        Category: category,
-        Path: null,
+        Category: resolvedCategory,
+        Path: normalizedTargetPath || null,
         FileSize: size
+    };
+}
+
+function fileInfoToRelatedDocumentItem(fileInfo, targetPath = null, category = null) {
+    const { name, contentType, size, buffer } = fileInfo;
+    const byteArray = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < byteArray.length; i++) binary += String.fromCharCode(byteArray[i]);
+
+    return {
+        Name: name,
+        Description: name,
+        ContentType: contentType || 'application/octet-stream',
+        Data: btoa(binary),
+        FileSize: size,
+        Category: category || null,
+        Path: normalizeDocumentTargetPath(targetPath) || null
+    };
+}
+
+function normalizeDocumentTargetPath(path) {
+    return String(path || '').replace(/\\/g, '/').trim().replace(/^\/+|\/+$/g, '');
+}
+
+function getDocumentPathLibrary(path) {
+    const normalized = normalizeDocumentTargetPath(path);
+    return normalized.split('/').filter(Boolean)[0] || 'DOCUMENTS';
+}
+
+function resolveRelatedDocumentTarget(mapping = {}, rowData = {}, objectContext = {}) {
+    const rawPath = mapping.savePathTemplate
+        ? resolveTokens(mapping.savePathTemplate, rowData, objectContext)
+        : mapping.savePathCol
+            ? getRowValue(rowData, mapping.savePathCol)
+            : mapping.savePath || '';
+    const targetPath = normalizeDocumentTargetPath(rawPath);
+    const category = mapping.category || (targetPath ? getDocumentPathLibrary(targetPath) : null);
+    return {
+        targetPath,
+        category
     };
 }
 
@@ -387,7 +432,7 @@ async function executeDocumentTransfer(rowData, definitionData, globalStore, exe
     if (encryptedData) headers['bimser-encrypted-data'] = encryptedData;
     headers['bimser-language'] = globalStore.get('language') || 'tr-TR';
 
-    const uploadResult = await uploadFileInParts(baseUrl, headers, fileInfo, targetPath, executionLog);
+    const uploadResult = await uploadFileInParts(baseUrl, headers, fileInfo, targetPath, getDocumentPathLibrary(targetPath), executionLog);
     return {
         status: 'Success',
         message: 'Document Uploaded',
@@ -559,15 +604,21 @@ async function resolveMappedValueArray(mapping, rowData, globalStore, apiCache, 
 
         const rawCell = getRowValue(rowData, col);
         const items = tryParseArrayCell(rawCell);
+        const separateText = mapping.useSeparateTextColumn === true && mapping.textCol;
+        const rawTextCell = separateText ? getRowValue(rowData, mapping.textCol) : null;
+        const textItems = separateText ? tryParseArrayCell(rawTextCell) : null;
 
         if (!items) {
             // Not an array - fall back to single value wrapped in array
             const single = resolvePrimitiveValue(rawCell, mapping.dataType, mapping);
-            return { Value: single !== null ? [single] : [], Text: String(single !== null ? single : '') };
+            const text = separateText
+                ? String(rawTextCell !== null && rawTextCell !== undefined ? rawTextCell : '')
+                : String(single !== null ? single : '');
+            return { Value: single !== null ? [single] : [], Text: text };
         }
 
         const values = items.map(item => resolvePrimitiveValue(item, mapping.dataType, mapping));
-        return { Value: values, Text: items.join(', ') };
+        return { Value: values, Text: (textItems || items).join(', ') };
     }
 
     // ── API ──────────────────────────────────────────────────────────────────────
@@ -650,6 +701,7 @@ async function resolveMappedValueArray(mapping, rowData, globalStore, apiCache, 
 async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, apiCache, objectContext, executionLog = [], warnings = [], fieldName = '', systemSettings = {}) {
     const apiMatchThreshold = systemSettings.apiMatchThreshold !== undefined ? systemSettings.apiMatchThreshold : 0.9;
     const apiCacheLimit = systemSettings.apiCacheLimit !== undefined ? systemSettings.apiCacheLimit : 50;
+    const useApiCache = mapping.cacheApiResponse !== false;
 
     // Build URL / Body (same as main resolveMappedValue)
     let resolvedUrl = '';
@@ -682,7 +734,8 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
                 skip: 0,
                 take: getApiPageSize(parsedBody)
             };
-            if (parsedBody.forceRefresh === undefined) parsedBody.forceRefresh = false;
+            if (!useApiCache) parsedBody.forceRefresh = true;
+            else if (parsedBody.forceRefresh === undefined) parsedBody.forceRefresh = false;
             injectInternalApiParameters(parsedBody, mapping.parameters, rowData, objectContext);
             resolvedBody = JSON.stringify(parsedBody);
         } catch (e) {
@@ -705,7 +758,7 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
     const cacheKey = `${resolvedUrl}|${resolvedBody}`;
     let apiResultList = [];
 
-    if (apiCache.has(cacheKey)) {
+    if (useApiCache && apiCache.has(cacheKey)) {
         apiResultList = apiCache.get(cacheKey);
         apiCache.delete(cacheKey);
         apiCache.set(cacheKey, apiResultList);
@@ -733,7 +786,7 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
                 fetchOptions.body = resolvedBody;
             }
             apiResultList = await fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, mapping.responsePath);
-            if (Array.isArray(apiResultList)) {
+            if (useApiCache && Array.isArray(apiResultList)) {
                 apiCache.set(cacheKey, apiResultList);
                 if (apiCache.size > apiCacheLimit) {
                     const keysIter = apiCache.keys();
@@ -807,6 +860,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
 
     const apiMatchThreshold = systemSettings.apiMatchThreshold !== undefined ? systemSettings.apiMatchThreshold : 0.9;
     const apiCacheLimit = systemSettings.apiCacheLimit !== undefined ? systemSettings.apiCacheLimit : 50;
+    const useApiCache = mapping?.cacheApiResponse !== false;
 
     if (!mapping) return { Value: null, Text: '' };
 
@@ -821,7 +875,12 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
         if (col) {
             const rawVal = getRowValue(rowData, col);
             finalValue = resolvePrimitiveValue(rawVal, mapping.dataType, mapping);
-            finalText = String(finalValue !== null ? finalValue : '');
+            if (mapping.useSeparateTextColumn === true && mapping.textCol) {
+                const rawText = getRowValue(rowData, mapping.textCol);
+                finalText = String(rawText !== null && rawText !== undefined ? rawText : '');
+            } else {
+                finalText = String(finalValue !== null ? finalValue : '');
+            }
         }
     } else if (mapping.source === 'API') {
         let searchKey = '';
@@ -886,7 +945,9 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
                 };
                 
                 // 4. Ensure forceRefresh
-                if (parsedBody.forceRefresh === undefined) {
+                if (!useApiCache) {
+                    parsedBody.forceRefresh = true;
+                } else if (parsedBody.forceRefresh === undefined) {
                     parsedBody.forceRefresh = false;
                 }
 
@@ -951,10 +1012,11 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
                 headers: fetchOptions.headers,
                 body: resolvedBody ? (function() { try { return JSON.parse(resolvedBody); } catch(e) { return resolvedBody; } })() : null
             },
-            response: null
+            response: null,
+            cacheEnabled: useApiCache
         };
 
-        if (apiCache.has(cacheKey)) {
+        if (useApiCache && apiCache.has(cacheKey)) {
             apiResultList = apiCache.get(cacheKey);
             // Update LRU by re-inserting
             apiCache.delete(cacheKey);
@@ -963,7 +1025,7 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
         } else {
             try {
                 apiResultList = await fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, mapping.responsePath, apiLog);
-                if (Array.isArray(apiResultList)) {
+                if (useApiCache && Array.isArray(apiResultList)) {
                     apiCache.set(cacheKey, apiResultList);
 
                     // PREVENT MEMORY LEAK: Limit apiCache size with Map
@@ -1193,7 +1255,6 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                     if (colType === 'RelatedDocument') {
                         const pathCol = colDef.mapping?.pathCol;
-                        const category = colDef.mapping?.category || 'DOCUMENTS';
                         if (pathCol) {
                             const filePathRaw = String(gridRow[pathCol] || '').trim();
                             if (filePathRaw && window.api?.readFileAsBuffer) {
@@ -1224,13 +1285,17 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                     const fileResult = await window.api.readFileAsBuffer(filePath);
                                     if (fileResult.success) {
                                         try {
-                                            const descriptor = await uploadFileInParts(
-                                                fileBaseUrl,
-                                                fileHeaders,
-                                                fileResult,
-                                                category,
-                                                executionLog
-                                            );
+                                            const { targetPath, category } = resolveRelatedDocumentTarget(colDef.mapping, gridRow, rowContext);
+                                            const descriptor = targetPath
+                                                ? await uploadFileInParts(
+                                                    fileBaseUrl,
+                                                    fileHeaders,
+                                                    fileResult,
+                                                    targetPath,
+                                                    category,
+                                                    executionLog
+                                                )
+                                                : fileInfoToRelatedDocumentItem(fileResult, null, category);
                                             resolvedItems.push(descriptor);
                                         } catch (uploadErr) {
                                             const errMsg = `RelatedDocument '${colDef.name}': upload failed for "${filePath}" - ${uploadErr.message}`;
@@ -1442,7 +1507,6 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     }
                 } else if (type === 'RelatedDocument') {
                     const pathCol = mapping.pathCol;
-                    const category = mapping.category || 'DOCUMENTS';
                     if (pathCol) {
                         const filePathRaw = String(getRowValue(rowData, pathCol) || '').trim();
                         if (filePathRaw && window.api?.readFileAsBuffer) {
@@ -1458,7 +1522,9 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                 filePaths = [filePathRaw];
                             }
 
-                            const fileBaseUrl = `${deployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer`;
+                            const fileDeployUrl = globalStore.get('deployUrl');
+                            if (!fileDeployUrl) throw new Error('Deploy URL not found');
+                            const fileBaseUrl = `${fileDeployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer`;
                             const fileHeaders = { 'Content-Type': 'application/json' };
                             const token = globalStore.get('token');
                             const encryptedData = globalStore.get('encryptedData');
@@ -1472,13 +1538,17 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                 const fileResult = await window.api.readFileAsBuffer(filePath);
                                 if (fileResult.success) {
                                     try {
-                                        const descriptor = await uploadFileInParts(
-                                            fileBaseUrl,
-                                            fileHeaders,
-                                            fileResult,
-                                            category,
-                                            executionLog
-                                        );
+                                        const { targetPath, category } = resolveRelatedDocumentTarget(mapping, rowData, objectContext);
+                                        const descriptor = targetPath
+                                            ? await uploadFileInParts(
+                                                fileBaseUrl,
+                                                fileHeaders,
+                                                fileResult,
+                                                targetPath,
+                                                category,
+                                                executionLog
+                                            )
+                                            : fileInfoToRelatedDocumentItem(fileResult, null, category);
                                         resolvedItems.push(descriptor);
                                     } catch (uploadErr) {
                                         const errMsg = `RelatedDocument '${def.name}': upload failed for "${filePath}" - ${uploadErr.message}`;

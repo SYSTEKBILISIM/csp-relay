@@ -246,13 +246,30 @@ namespace Ataven.Managers
         private void SetRelatedDocuments(FormInstance formInstance, List<RelatedDocumentsModel> relatedDocuments) {
             DocumentManagementHelper documentManagementHelper = _serviceAPI.GetHelperInstance<DocumentManagementHelper>();
             foreach(var rds in relatedDocuments) {
-                string savePath = formInstance.ClientForm.Data.Entities.Items[rds.FieldName]["properties"]["path"].ToString();
+                string defaultSavePath = NormalizeDocumentPath(formInstance.ClientForm.Data.Entities.Items[rds.FieldName]["properties"]["path"].ToString());
                 foreach(var rdItem in rds.Items) {
-                    var relatedFile = documentManagementHelper.GetFileFromSecretKey(rdItem.FileSecretKey).Result.Response;
+                    string savePath = !string.IsNullOrWhiteSpace(rdItem.Path)
+                        ? NormalizeDocumentPath(rdItem.Path)
+                        : defaultSavePath;
+                    if (string.IsNullOrWhiteSpace(rdItem.FileSecretKey) && string.IsNullOrWhiteSpace(rdItem.Data))
+                        throw new ArgumentException($"RelatedDocument '{rds.FieldName}' item must include FileSecretKey or Data.");
+
+                    var relatedFile = !string.IsNullOrWhiteSpace(rdItem.FileSecretKey)
+                        ? documentManagementHelper.GetFileFromSecretKey(rdItem.FileSecretKey).Result.Response
+                        : documentManagementHelper.CreateFile(
+                            rdItem.Name ?? "RelatedDocument",
+                            rdItem.Description ?? rdItem.Name ?? string.Empty,
+                            Convert.FromBase64String(rdItem.Data ?? string.Empty),
+                            savePath,
+                            rdItem.ContentType ?? "application/octet-stream"
+                        ).Result.Response;
 
                     var relatedItems = formInstance.Controls[rds.FieldName].Value.ToJsonString().ToObject<List<RelatedDocumentFile>>();
                     var relatedCategories = formInstance.Controls[rds.FieldName].Categories.ToJsonString().ToObject<List<RelatedDocumentCategory>>();
-                    var selectedCategory = relatedCategories.FirstOrDefault(c => c.Name.Values.Any(v => v == rdItem.Category)) ?? relatedCategories.FirstOrDefault();
+                    string categoryName = !string.IsNullOrWhiteSpace(rdItem.Category)
+                        ? rdItem.Category
+                        : savePath.Split('/').FirstOrDefault();
+                    var selectedCategory = relatedCategories.FirstOrDefault(c => c.Name.Values.Any(v => v == categoryName)) ?? relatedCategories.FirstOrDefault();
                     string currentLanguage = _serviceAPI.HumanResources.GetCurrentUserInfo().Result.Result.Info.Language;
                     var rdItemName = relatedFile.Name.TryGetValue(currentLanguage, out var localizedName) ? localizedName : relatedFile.Name.Values.First();
                     var rdItemDesc = relatedFile.Description.TryGetValue(currentLanguage, out var localizedDescription) ? localizedDescription : relatedFile.Description.Values.First();
@@ -275,6 +292,11 @@ namespace Ataven.Managers
                     formInstance.Controls[rds.FieldName].Value = relatedItems;
                 }
             }
+        }
+
+        private string NormalizeDocumentPath(string path)
+        {
+            return (path ?? string.Empty).Replace("\\", "/").Trim().Trim('/');
         }
 
         private void SetRelatedGrids(FormInstance formInstance, FormData formData, List<RelatedGridModel> relatedGrids) {

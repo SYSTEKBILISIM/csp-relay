@@ -4,7 +4,14 @@ import { electronAPI } from '@electron-toolkit/preload'
 // Custom APIs for renderer
 const api = {
     readFileAsBase64: (filePath) => ipcRenderer.invoke('read-file-as-base64', filePath),
-    readFileAsBuffer: (filePath) => ipcRenderer.invoke('read-file-as-buffer', filePath)
+    readFileAsBuffer: (filePath) => ipcRenderer.invoke('read-file-as-buffer', filePath),
+    transferLogs: {
+        reset: () => ipcRenderer.invoke('transfer-log:reset'),
+        append: (key, data) => ipcRenderer.invoke('transfer-log:append', { key, data }),
+        get: (key) => ipcRenderer.invoke('transfer-log:get', key),
+        getPath: () => ipcRenderer.invoke('transfer-log:path'),
+        exportJson: (metadata, suggestedName) => ipcRenderer.invoke('transfer-log:export-json', { metadata, suggestedName })
+    }
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

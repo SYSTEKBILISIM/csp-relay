@@ -434,10 +434,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                 } else if (record.type === 'RelatedDocument') {
                     summaryNode = mapping.pathCol
                         ? (
-                            <Tooltip title={`File: ${mapping.pathCol}`} mouseEnterDelay={0.3}>
+                            <Tooltip title={`File: ${mapping.pathCol}${mapping.savePathCol ? ` | Save Path: ${mapping.savePathCol}` : ''}`} mouseEnterDelay={0.3}>
                                 <Tag color="purple" style={{ margin: 0 }}>
                                     <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
-                                        File: {mapping.pathCol}
+                                        File: {mapping.pathCol}{mapping.savePathCol ? ` / Path: ${mapping.savePathCol}` : ''}
                                     </span>
                                 </Tag>
                             </Tooltip>
@@ -475,10 +475,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                     } else {
                         summaryNode = mapping.valueCol
                             ? (
-                                <Tooltip title={mapping.valueCol} mouseEnterDelay={0.3}>
+                                <Tooltip title={mapping.useSeparateTextColumn ? `Value: ${mapping.valueCol} | Text: ${mapping.textCol || '-'}` : mapping.valueCol} mouseEnterDelay={0.3}>
                                     <Tag color="cyan" style={{ margin: 0 }}>
                                         <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
-                                            {mapping.valueCol}
+                                            {mapping.useSeparateTextColumn ? `V: ${mapping.valueCol} / T: ${mapping.textCol || '-'}` : mapping.valueCol}
                                         </span>
                                     </Tag>
                                 </Tooltip>

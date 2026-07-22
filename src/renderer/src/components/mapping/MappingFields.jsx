@@ -34,7 +34,9 @@ export const MappingFields = ({
 
     // Ref to track the state of inputs BEFORE onSelect fires
     const lastSearchValues = React.useRef({});
+    const lastTypedValues = React.useRef({});
     const inputRefs = React.useRef({});
+    const selectionRefs = React.useRef({});
     const filterCache = React.useRef({ inputValue: null, scopeColumns: null, hasAnyMatch: false, searchVal: '' });
 
     const normalizedFormScopes = React.useMemo(() => {
@@ -98,7 +100,7 @@ export const MappingFields = ({
     };
 
     const shouldFormUpdate = (prev, curr) => {
-        const fields = ["source", "dataType", "apiType", "apiUrl", "nonEmptyIsTrue", "otherValuesAreFalse", "parameters", "controlName", "controlScopeKey", "controlProperty"];
+        const fields = ["source", "dataType", "isArray", "valueCol", "textCol", "useSeparateTextColumn", "apiType", "apiUrl", "cacheApiResponse", "nonEmptyIsTrue", "otherValuesAreFalse", "parameters", "controlName", "controlScopeKey", "controlProperty"];
         for (const field of fields) {
             const path = getName(field);
             if (JSON.stringify(getNestedValue(prev, path)) !== JSON.stringify(getNestedValue(curr, path))) {
@@ -109,56 +111,89 @@ export const MappingFields = ({
     };
 
     const handleTemplateSearch = (val, fieldKey) => {
+        const isSelectedOptionValue = (memoizedOptions || []).some(option => option.value === val);
+        if (isSelectedOptionValue) return;
+
         lastSearchValues.current[fieldKey] = val;
+        lastTypedValues.current[fieldKey] = val;
+    };
+
+    const rememberTemplateSelection = (fieldKey) => {
+        const inputEl = inputRefs.current[fieldKey];
+        if (!inputEl) return;
+
+        selectionRefs.current[fieldKey] = {
+            start: inputEl.selectionStart ?? inputEl.value?.length ?? 0,
+            end: inputEl.selectionEnd ?? inputEl.value?.length ?? 0
+        };
+    };
+
+    const getTemplateReplacementRange = (text, cursor) => {
+        const safeCursor = Math.max(0, Math.min(cursor, text.length));
+        const beforeCursor = text.slice(0, safeCursor);
+        const lastClosedToken = beforeCursor.lastIndexOf('}}');
+        const lastOpenToken = beforeCursor.lastIndexOf('{{');
+        const lastWhitespace = Math.max(
+            beforeCursor.lastIndexOf(' '),
+            beforeCursor.lastIndexOf('\t'),
+            beforeCursor.lastIndexOf('\n')
+        );
+
+        if (lastOpenToken > lastClosedToken) {
+            return { start: lastOpenToken, end: safeCursor };
+        }
+
+        return { start: Math.max(lastClosedToken + 2, lastWhitespace + 1, 0), end: safeCursor };
     };
 
     const handleTemplateSelect = (value, fieldKey) => {
-        const prevVal = lastSearchValues.current[fieldKey] || '';
+        const fieldPath = getName(fieldKey);
+        const formValue = formInstance.getFieldValue(fieldPath);
+        const currentFormValue = formValue !== undefined && formValue !== null
+            ? String(formValue)
+            : (lastSearchValues.current[fieldKey] || '');
+        const typedValue = lastTypedValues.current[fieldKey];
+        const prevVal = currentFormValue === value && typedValue !== undefined
+            ? typedValue
+            : currentFormValue;
         const inputEl = inputRefs.current[fieldKey];
-        
-        if (!inputEl) {
-            // Fallback to programmatic updates if element is not ready
-            const lastTagCloseIndex = prevVal.lastIndexOf('}}');
-            let base = prevVal;
-            const lastTagOpenIndex = prevVal.lastIndexOf('{{');
-            if (lastTagOpenIndex !== -1 && lastTagOpenIndex > lastTagCloseIndex) {
-                base = prevVal.substring(0, lastTagOpenIndex);
-            }
-            const separator = (base && !base.endsWith(' ') && !base.endsWith('{')) ? ' ' : '';
-            const newValue = base + separator + value;
-            formInstance.setFieldValue(getName(fieldKey), newValue);
-            lastSearchValues.current[fieldKey] = newValue;
-            return;
-        }
+        const rememberedSelection = selectionRefs.current[fieldKey] || {};
+        const liveStart = inputEl?.selectionStart;
+        const liveEnd = inputEl?.selectionEnd;
+        const useRememberedSelection = currentFormValue === value && typedValue !== undefined;
+        const start = useRememberedSelection ? rememberedSelection.start : (typeof liveStart === 'number' ? liveStart : rememberedSelection.start);
+        const end = useRememberedSelection ? rememberedSelection.end : (typeof liveEnd === 'number' ? liveEnd : rememberedSelection.end);
 
-        // Focus the input natively so execCommand applies to it
-        inputEl.focus();
-
-        const start = inputEl.selectionStart;
-        const end = inputEl.selectionEnd;
-
-        if (start !== end) {
-            // Highlighting selection exists: replace it natively (preserves undo/redo stack)
-            document.execCommand('insertText', false, value);
+        let range;
+        if (typeof start === 'number' && typeof end === 'number' && start !== end) {
+            range = {
+                start: Math.max(0, Math.min(start, prevVal.length)),
+                end: Math.max(0, Math.min(end, prevVal.length))
+            };
         } else {
-            // No selection (just cursor): replace active typing tag if exists
-            const lastTagCloseIndex = prevVal.lastIndexOf('}}');
-            const lastTagOpenIndex = prevVal.lastIndexOf('{{');
-            
-            if (lastTagOpenIndex !== -1 && lastTagOpenIndex > lastTagCloseIndex) {
-                // Select the text starting from '{{' to the end of input
-                inputEl.setSelectionRange(lastTagOpenIndex, prevVal.length);
-                document.execCommand('insertText', false, value);
-            } else {
-                // Otherwise, append to the end
-                const separator = (prevVal && !prevVal.endsWith(' ') && !prevVal.endsWith('{')) ? ' ' : '';
-                inputEl.setSelectionRange(prevVal.length, prevVal.length);
-                document.execCommand('insertText', false, separator + value);
-            }
+            const cursor = typeof end === 'number' ? end : prevVal.length;
+            range = getTemplateReplacementRange(prevVal, cursor);
         }
 
-        // Sync local search cache with the new value
-        lastSearchValues.current[fieldKey] = formInstance.getFieldValue(getName(fieldKey));
+        const prefix = prevVal.slice(0, range.start);
+        const suffix = prevVal.slice(range.end);
+        const needsLeadingSpace = prefix && !/\s$/.test(prefix) && !prefix.endsWith('{{');
+        const needsTrailingSpace = suffix && !/^\s/.test(suffix) && !suffix.startsWith('}}');
+        const newValue = `${prefix}${needsLeadingSpace ? ' ' : ''}${value}${needsTrailingSpace ? ' ' : ''}${suffix}`;
+        const nextCursor = (prefix + (needsLeadingSpace ? ' ' : '') + value).length;
+
+        formInstance.setFieldValue(fieldPath, newValue);
+        lastSearchValues.current[fieldKey] = newValue;
+        lastTypedValues.current[fieldKey] = newValue;
+        selectionRefs.current[fieldKey] = { start: nextCursor, end: nextCursor };
+
+        window.requestAnimationFrame(() => {
+            const currentInput = inputRefs.current[fieldKey];
+            if (currentInput) {
+                currentInput.focus();
+                currentInput.setSelectionRange(nextCursor, nextCursor);
+            }
+        });
     };
 
     const templateOptionsFilter = (inputValue, option) => {
@@ -411,17 +446,58 @@ export const MappingFields = ({
                                     borderTop: '4px solid #1677ff',
                                     border: '1px solid #eef2f6'
                                 }}>
-                                    <Form.Item
-                                        name={getName("valueCol")}
-                                        label={<Text strong style={{ fontSize: 12, color: '#1e293b' }}>Source Excel Column</Text>}
-                                        rules={[{ required: true, message: 'Please select Source Excel Column' }]}
-                                        help={<Text type="secondary" style={{ fontSize: 10 }}>Target will be mapped directly from this column.</Text>}
-                                        style={{ marginBottom: 0 }}
-                                    >
-                                        <Select showSearch placeholder="Choose column..." style={{ width: '100%' }}>
-                                            {(scopeColumns || []).filter(col => col !== undefined && col !== null && col !== '').map(col => <Option key={col} value={col}>{col}</Option>)}
-                                        </Select>
-                                    </Form.Item>
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, marginBottom: getFieldValue(getName("useSeparateTextColumn")) ? 12 : 10 }}>
+                                        <div>
+                                            <Text strong style={{ display: 'block', fontSize: 11, color: '#475569' }}>Use separate Text column</Text>
+                                            <Text type="secondary" style={{ display: 'block', fontSize: 10 }}>Select different Excel columns for CSP Value and Text.</Text>
+                                        </div>
+                                        <Form.Item name={getName("useSeparateTextColumn")} valuePropName="checked" noStyle>
+                                            <Switch size="small" />
+                                        </Form.Item>
+                                    </div>
+                                    <Divider style={{ margin: '0 0 12px 0', borderColor: '#e2e8f0' }} />
+                                    {getFieldValue(getName("useSeparateTextColumn")) ? (
+                                        <Row gutter={12}>
+                                            <Col span={12}>
+                                                <Form.Item
+                                                    name={getName("valueCol")}
+                                                    label={<Text strong style={{ fontSize: 12, color: '#1e293b' }}>Value Excel Column</Text>}
+                                                    rules={[{ required: true, message: 'Please select Value Excel Column' }]}
+                                                    help={<Text type="secondary" style={{ fontSize: 10 }}>Stored value will be taken from this column.</Text>}
+                                                    style={{ marginBottom: 0 }}
+                                                >
+                                                    <Select showSearch placeholder="Choose value column..." style={{ width: '100%' }}>
+                                                        {(scopeColumns || []).filter(col => col !== undefined && col !== null && col !== '').map(col => <Option key={col} value={col}>{col}</Option>)}
+                                                    </Select>
+                                                </Form.Item>
+                                            </Col>
+                                            <Col span={12}>
+                                                <Form.Item
+                                                    name={getName("textCol")}
+                                                    label={<Text strong style={{ fontSize: 12, color: '#1e293b' }}>Text Excel Column</Text>}
+                                                    rules={[{ required: true, message: 'Please select Text Excel Column' }]}
+                                                    help={<Text type="secondary" style={{ fontSize: 10 }}>Visible text will be taken from this column.</Text>}
+                                                    style={{ marginBottom: 0 }}
+                                                >
+                                                    <Select showSearch placeholder="Choose text column..." style={{ width: '100%' }}>
+                                                        {(scopeColumns || []).filter(col => col !== undefined && col !== null && col !== '').map(col => <Option key={col} value={col}>{col}</Option>)}
+                                                    </Select>
+                                                </Form.Item>
+                                            </Col>
+                                        </Row>
+                                    ) : (
+                                        <Form.Item
+                                            name={getName("valueCol")}
+                                            label={<Text strong style={{ fontSize: 12, color: '#1e293b' }}>Source Excel Column</Text>}
+                                            rules={[{ required: true, message: 'Please select Source Excel Column' }]}
+                                            help={<Text type="secondary" style={{ fontSize: 10 }}>Target value and text will be mapped directly from this column.</Text>}
+                                            style={{ marginBottom: 0 }}
+                                        >
+                                            <Select showSearch placeholder="Choose column..." style={{ width: '100%' }}>
+                                                {(scopeColumns || []).filter(col => col !== undefined && col !== null && col !== '').map(col => <Option key={col} value={col}>{col}</Option>)}
+                                            </Select>
+                                        </Form.Item>
+                                    )}
                                 </div>
                             )}
 
@@ -522,6 +598,20 @@ export const MappingFields = ({
                                                             ) : null
                                                         }
                                                     />
+                                                </Form.Item>
+
+                                                <Form.Item
+                                                    name={getName("cacheApiResponse")}
+                                                    valuePropName="checked"
+                                                    initialValue={true}
+                                                    style={{ margin: '10px 0 0' }}
+                                                >
+                                                    <Checkbox>
+                                                        <Text strong style={{ fontSize: 12 }}>Cache API response</Text>
+                                                        <Text type="secondary" style={{ display: 'block', fontSize: 11 }}>
+                                                            When disabled, every lookup sends a new request and reads the latest data.
+                                                        </Text>
+                                                    </Checkbox>
                                                 </Form.Item>
                                             </div>
                                         )}
@@ -633,6 +723,10 @@ export const MappingFields = ({
                                                                         inputRefs.current["searchKeyTemplate"] = el.input || el;
                                                                     }
                                                                 }}
+                                                                onFocus={() => rememberTemplateSelection("searchKeyTemplate")}
+                                                                onClick={() => rememberTemplateSelection("searchKeyTemplate")}
+                                                                onKeyUp={() => rememberTemplateSelection("searchKeyTemplate")}
+                                                                onSelect={() => rememberTemplateSelection("searchKeyTemplate")}
                                                                 size="small" 
                                                                 placeholder="e.g. {{ID}}" 
                                                                 variant="borderless" 
@@ -820,6 +914,7 @@ export const MappingFields = ({
                         const src = getFieldValue(getName('source'));
                         const txt = getFieldValue(getName('searchKeyTemplate')) || getFieldValue(getName('textCol'));
                         const val = getFieldValue(getName('valueCol'));
+                        const useSeparateTextColumn = getFieldValue(getName('useSeparateTextColumn')) === true;
                         const compare = getFieldValue(getName('displayFormat'));
                         const fixedVal = getFieldValue(getName('fixedValue'));
                         const isArray = getFieldValue(getName('isArray'));
@@ -859,11 +954,15 @@ export const MappingFields = ({
                                     <Text style={{ fontSize: 12, color: '#334155' }}>
                                         {isArray ? (
                                             <span>
-                                                Parses Excel column <Tag color="blue" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{val || '???'}</Tag> as a JSON array and maps each item individually.
+                                                Parses Excel column <Tag color="blue" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{val || '???'}</Tag> as a JSON array
+                                                {useSeparateTextColumn && <span> and uses <Tag color="geekblue" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{txt || '???'}</Tag> as text</span>}
+                                                .
                                             </span>
                                         ) : (
                                             <span>
-                                                Maps values directly from Excel column <Tag color="blue" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{val || '???'}</Tag>.
+                                                Maps value from Excel column <Tag color="blue" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{val || '???'}</Tag>
+                                                {useSeparateTextColumn && <span> and text from <Tag color="geekblue" bordered={false} style={{ fontSize: 11, padding: '0 4px', margin: '0 2px' }}>{txt || '???'}</Tag></span>}
+                                                .
                                             </span>
                                         )}
                                     </Text>

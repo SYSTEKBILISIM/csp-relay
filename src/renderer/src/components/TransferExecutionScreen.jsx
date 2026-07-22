@@ -7,6 +7,7 @@ import { useTransferExecution } from '../hooks/useTransferExecution';
 import { LogDetailsModal, safeJsonFormat, CopyAnimatedButton } from './log/LogDetailsModal';
 import { getRowValue } from '../utils/transferUtils';
 import { ResizableTitle } from './ResizableTitle';
+import { logDB } from '../services/IndexedDBService';
 import '../assets/css/TransferExecutionScreen.css';
 
 // Robust Turkish-aware lowercasing with normalization
@@ -107,6 +108,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         stats,
         logs,
         estimatedTime,
+        estimatedFinishAt,
         executionMode,
         setExecutionMode,
         executionTiming,
@@ -336,56 +338,19 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             return;
         }
 
-        const hide = message.loading({ content: 'Gathering full request/response details for JSON export...', key: 'exportJson', duration: 0 });
+        message.loading({ content: 'Preparing the file-backed transfer log...', key: 'exportJson', duration: 0 });
 
         try {
-            // Using a timeout to allow the loading message to render before blocking
-            await new Promise(resolve => setTimeout(resolve, 50));
-
             if (!definitionData) {
                 throw new Error("Definition data is missing. Please restart the process.");
             }
 
-            const fullResults = [];
-            for (const log of logs) {
-                // Skip pending
-                if (log.status === 'Pending') continue;
-
-                let details = {};
-                try {
-                    details = await getLogDetailsAsync(log.key) || {};
-                } catch (dbErr) {
-                    console.error('Failed to get details for log:', log.key, dbErr);
-                    // Continue with empty details
-                }
-
-                const rowData = getRowData(log.key) || {};
-
-                fullResults.push({
-                    ...log,
-                    details: {
-                        ...details,
-                        // Ensure executionLog steps also have pretty JSON if needed
-                        executionLog: (details.executionLog || []).map(step => ({
-                            ...step,
-                            raw: step.raw ? {
-                                ...step.raw,
-                                request: step.raw.request,
-                                response: step.raw.response
-                            } : undefined
-                        }))
-                    },
-                    rowData
-                });
-            }
-
-            if (fullResults.length === 0) {
+            if (!logs.some(log => log.status !== 'Pending' && log.status !== 'Processing')) {
                 message.warning({ content: 'No processed logs to export.', key: 'exportJson' });
                 return;
             }
 
-            const exportObj = {
-                exportDate: new Date().toLocaleString(),
+            const metadata = {
                 projectName: definitionData?.projectName || 'Unnamed Project',
                 transactionType: definitionData?.transactionType || 'N/A',
                 deployAgent: definitionData?.deployAgent || 'N/A',
@@ -395,20 +360,16 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 startingEventCode: definitionData?.startingEventCode,
                 mainSheet: definitionData?.mainSheet,
                 fileName: definitionData?.fileName,
-                stats: stats,
-                results: fullResults
+                stats
             };
-
-            const dataStr = JSON.stringify(exportObj, null, 2);
-            const dataBlob = new Blob([dataStr], { type: 'application/json' });
-            const url = URL.createObjectURL(dataBlob);
-            const link = document.createElement('a');
-            link.href = url;
-            link.download = `Full_Transfer_Logs_${definitionData?.projectName || 'export'}_${Date.now()}.json`;
-            link.click();
-            URL.revokeObjectURL(url);
-
-            message.success({ content: 'Full JSON results exported successfully.', key: 'exportJson' });
+            const safeProjectName = String(definitionData?.projectName || 'export').replace(/[<>:"/\\|?*]/g, '_');
+            const result = await logDB.exportJson(metadata, `Full_Transfer_Logs_${safeProjectName}_${Date.now()}.json`);
+            if (result?.canceled) {
+                message.info({ content: 'Log export canceled.', key: 'exportJson' });
+                return;
+            }
+            if (!result?.success) throw new Error(result?.error || 'The log file could not be exported.');
+            message.success({ content: `Transfer logs exported to ${result.filePath}`, key: 'exportJson', duration: 5 });
         } catch (error) {
             console.error('JSON Export Error:', error);
             message.error({ content: `Failed to export JSON: ${error.message}`, key: 'exportJson', duration: 4 });
@@ -1008,6 +969,10 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                         <div className="execution-time-stat">
                             <div className="execution-time-label">Estimated</div>
                             <div className="execution-time-value">{estimatedTime || '-'}</div>
+                        </div>
+                        <div className="execution-time-stat">
+                            <div className="execution-time-label">Estimated Finished</div>
+                            <div className="execution-time-value"><ExecutionDateValue timestamp={estimatedFinishAt} /></div>
                         </div>
                         <div className="execution-time-stat">
                             <div className="execution-time-label">Started</div>
