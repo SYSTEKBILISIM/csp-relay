@@ -13,7 +13,9 @@ using Bimser.Framework.Json;
 using Bimser.Synergy.ServiceAPI;
 using Bimser.Synergy.ServiceAPI.Models.Form;
 using Bimser.Synergy.Entities.FormDesigner.Runtime.Enums;
+using Bimser.CSP.FormControls.Base;
 using Bimser.CSP.FormControls.Controls;
+using FormPrimitiveType = Bimser.CSP.FormControls.Enums.PrimitiveType;
 using Newtonsoft.Json.Linq;
 
 namespace Ataven.Managers
@@ -269,6 +271,38 @@ namespace Ataven.Managers
             }
         }
 
+        private List<object> ToControlValueList(object value)
+        {
+            return value switch
+            {
+                IEnumerable<object> list => list.ToList(),
+                IEnumerable nonGenericList when !(value is string) => nonGenericList.Cast<object>().ToList(),
+                _ => value != null ? new List<object> { value } : new List<object>()
+            };
+        }
+
+        private FormPrimitiveType? ResolvePrimitiveType(string dataType)
+        {
+            if (string.IsNullOrWhiteSpace(dataType))
+                return null;
+
+            switch (dataType.Trim().ToLowerInvariant())
+            {
+                case "string":
+                    return FormPrimitiveType.String;
+                case "integer":
+                    return FormPrimitiveType.Integer;
+                case "decimal":
+                    return FormPrimitiveType.Decimal;
+                case "boolean":
+                    return FormPrimitiveType.Boolean;
+                case "date":
+                    return FormPrimitiveType.Date;
+                default:
+                    return null;
+            }
+        }
+
         private void SetObjects(FormInstance formInstance, List<ObjectModel> objects)
         {
             foreach (var obj in objects)
@@ -277,27 +311,39 @@ namespace Ataven.Managers
                 {
                     object normalizedValue = NormalizeControlValue(obj.Value, obj.DataType);
                     string normalizedText = obj.Text?.ToString();
+                    var control = formInstance.Controls[obj.FieldName];
 
-                    if (formInstance.Controls[obj.FieldName].Type == "Lookup")
+                    if (control is ComboBoxBase comboBox)
                     {
-                        var values = normalizedValue switch
-                        {
-                            IEnumerable<object> list => list.ToList(),
-                            IEnumerable nonGenericList => nonGenericList.Cast<object>().ToList(),
-                            _ => normalizedValue != null ? new List<object> { normalizedValue } : new List<object>()
-                        };
+                        FormPrimitiveType? valueType = ResolvePrimitiveType(obj.DataType);
+                        if (valueType.HasValue)
+                            comboBox.ValueType = valueType.Value;
 
-                        if (normalizedValue != null && (!(normalizedValue is string strValueLookup) || !string.IsNullOrWhiteSpace(strValueLookup)))
-                            formInstance.Controls[obj.FieldName].Value = values;
                         if (!string.IsNullOrWhiteSpace(normalizedText))
-                            formInstance.Controls[obj.FieldName].Text = normalizedText;
+                            comboBox.Text = normalizedText;
+
+                        if (normalizedValue != null && (!(normalizedValue is string strValueComboBox) || !string.IsNullOrWhiteSpace(strValueComboBox)))
+                            comboBox.SelectedItemValues = ToControlValueList(normalizedValue);
+                        continue;
+                    }
+
+                    if (control is Lookup lookup)
+                    {
+                        FormPrimitiveType? valueType = ResolvePrimitiveType(obj.DataType);
+                        if (valueType.HasValue)
+                            lookup.ValueType = valueType.Value;
+
+                        if (!string.IsNullOrWhiteSpace(normalizedText))
+                            lookup.Text = normalizedText;
+                        if (normalizedValue != null && (!(normalizedValue is string strValueLookup) || !string.IsNullOrWhiteSpace(strValueLookup)))
+                            lookup.Value = ToControlValueList(normalizedValue);
                         continue;
                     }
 
                     if (normalizedValue != null && (!(normalizedValue is string strValueObject) || !string.IsNullOrWhiteSpace(strValueObject)))
-                        formInstance.Controls[obj.FieldName].Value = normalizedValue;
+                        control.Value = normalizedValue;
                     if (!string.IsNullOrWhiteSpace(normalizedText))
-                        formInstance.Controls[obj.FieldName].Text = normalizedText;
+                        control.Text = normalizedText;
                 }
                 catch (Exception ex)
                 {
