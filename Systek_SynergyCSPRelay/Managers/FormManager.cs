@@ -169,30 +169,132 @@ namespace Ataven.Managers
             return null;
         }
 
+        private object NormalizeControlValue(object value, string dataType = null)
+        {
+            if (value == null)
+                return null;
+
+            if (value is JsonElement jsonElement)
+            {
+                switch (jsonElement.ValueKind)
+                {
+                    case JsonValueKind.String:
+                        return CoerceControlValue(jsonElement.GetString(), dataType);
+                    case JsonValueKind.Number:
+                        if (jsonElement.TryGetInt32(out int intValue))
+                            return CoerceControlValue(intValue, dataType);
+                        if (jsonElement.TryGetInt64(out long longValue))
+                            return CoerceControlValue(longValue, dataType);
+                        if (jsonElement.TryGetDecimal(out decimal decimalValue))
+                            return CoerceControlValue(decimalValue, dataType);
+                        return CoerceControlValue(jsonElement.GetDouble(), dataType);
+                    case JsonValueKind.True:
+                        return CoerceControlValue(true, dataType);
+                    case JsonValueKind.False:
+                        return CoerceControlValue(false, dataType);
+                    case JsonValueKind.Array:
+                        return jsonElement.EnumerateArray()
+                            .Select(item => NormalizeControlValue(item, dataType))
+                            .ToList();
+                    case JsonValueKind.Object:
+                        return jsonElement.EnumerateObject()
+                            .ToDictionary(
+                                property => property.Name,
+                                property => NormalizeControlValue(property.Value)
+                            );
+                    case JsonValueKind.Null:
+                    case JsonValueKind.Undefined:
+                        return null;
+                }
+            }
+
+            if (value is JValue jValue)
+                return CoerceControlValue(jValue.Value, dataType);
+
+            if (value is JArray jArray)
+                return jArray.Select(item => NormalizeControlValue(item, dataType)).ToList();
+
+            if (value is JObject jObject)
+                return jObject.Properties().ToDictionary(
+                    property => property.Name,
+                    property => NormalizeControlValue(property.Value)
+                );
+
+            if (value is IEnumerable<object> objectList)
+                return objectList.Select(item => NormalizeControlValue(item, dataType)).ToList();
+
+            if (value is IEnumerable nonGenericList && !(value is string))
+                return nonGenericList.Cast<object>()
+                    .Select(item => NormalizeControlValue(item, dataType))
+                    .ToList();
+
+            return CoerceControlValue(value, dataType);
+        }
+
+        private object CoerceControlValue(object value, string dataType)
+        {
+            if (value == null || string.IsNullOrWhiteSpace(dataType))
+                return value;
+
+            try
+            {
+                switch (dataType.Trim().ToLowerInvariant())
+                {
+                    case "string":
+                        return Convert.ToString(value, CultureInfo.InvariantCulture);
+                    case "integer":
+                        long integerValue = Convert.ToInt64(value, CultureInfo.InvariantCulture);
+                        return integerValue >= int.MinValue && integerValue <= int.MaxValue
+                            ? (object)(int)integerValue
+                            : integerValue;
+                    case "decimal":
+                        return Convert.ToDecimal(value, CultureInfo.InvariantCulture);
+                    case "boolean":
+                        return Convert.ToBoolean(value, CultureInfo.InvariantCulture);
+                    default:
+                        return value;
+                }
+            }
+            catch (FormatException)
+            {
+                return value;
+            }
+            catch (InvalidCastException)
+            {
+                return value;
+            }
+            catch (OverflowException)
+            {
+                return value;
+            }
+        }
+
         private void SetObjects(FormInstance formInstance, List<ObjectModel> objects)
         {
             foreach (var obj in objects)
             {
                 try
                 {
+                    object normalizedValue = NormalizeControlValue(obj.Value, obj.DataType);
+
                     if (formInstance.Controls[obj.FieldName].Type == "Lookup")
                     {
-                        var values = obj.Value switch
+                        var values = normalizedValue switch
                         {
                             IEnumerable<object> list => list.ToList(),
                             IEnumerable nonGenericList => nonGenericList.Cast<object>().ToList(),
-                            _ => obj.Value != null ? new List<object> { obj.Value } : new List<object>()
+                            _ => normalizedValue != null ? new List<object> { normalizedValue } : new List<object>()
                         };
 
-                        if (obj.Value != null && (!(obj.Value is string strValueLookup) || !string.IsNullOrWhiteSpace(strValueLookup)))
+                        if (normalizedValue != null && (!(normalizedValue is string strValueLookup) || !string.IsNullOrWhiteSpace(strValueLookup)))
                             formInstance.Controls[obj.FieldName].Value = values;
                         if (!string.IsNullOrWhiteSpace(obj.Text))
                             formInstance.Controls[obj.FieldName].Text = obj.Text;
                         continue;
                     }
 
-                    if (obj.Value != null && (!(obj.Value is string strValueObject) || !string.IsNullOrWhiteSpace(strValueObject)))
-                        formInstance.Controls[obj.FieldName].Value = obj.Value;
+                    if (normalizedValue != null && (!(normalizedValue is string strValueObject) || !string.IsNullOrWhiteSpace(strValueObject)))
+                        formInstance.Controls[obj.FieldName].Value = normalizedValue;
                     if (!string.IsNullOrWhiteSpace(obj.Text))
                         formInstance.Controls[obj.FieldName].Text = obj.Text;
                 }
@@ -224,7 +326,7 @@ namespace Ataven.Managers
                         foreach(var obj in row.Objects) {
                             GridDataRowCell cell = new GridDataRowCell();
                             cell.Name = obj.FieldName;
-                            cell.Value = obj.Value;
+                            cell.Value = NormalizeControlValue(obj.Value, obj.DataType);
                             cell.Text = obj.Text;
                             newRow.Cells.Add(cell);
                         }

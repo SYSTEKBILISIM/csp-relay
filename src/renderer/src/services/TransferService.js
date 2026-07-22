@@ -1350,6 +1350,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         FieldName: colDef.name,
                         Value: result.Value,
                         Text: result.Text,
+                        DataType: colDef.mapping?.dataType || colDef.dataType || 'String',
                         Type: 'Object'
                     });
                 }
@@ -1400,7 +1401,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         objects.push({
                             FieldName: obj.FieldName,
                             Value: obj.Value,
-                            Text: obj.Text
+                            Text: obj.Text,
+                            DataType: obj.DataType
                         });
                     }
                 });
@@ -1595,7 +1597,13 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 } else {
                     const result = await resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog, warnings, def.name, systemSettings);
                     objectContext[def.name] = result;
-                    rowObj = { FieldName: def.name, Value: result.Value, Text: result.Text, Type: 'Object' };
+                    rowObj = {
+                        FieldName: def.name,
+                        Value: result.Value,
+                        Text: result.Text,
+                        DataType: mapping.dataType || 'String',
+                        Type: 'Object'
+                    };
                 }
 
                 return rowObj;

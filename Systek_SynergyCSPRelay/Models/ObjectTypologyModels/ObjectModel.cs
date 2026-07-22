@@ -5,5 +5,6 @@ namespace Ataven.Models
         public string FieldName { get; set; }
         public object? Value { get; set; }
         public string? Text { get; set; }
+        public string? DataType { get; set; }
     }
 }

@@ -56,7 +56,8 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
             formObjects.push({
                 FieldName: obj.FieldName,
                 Value: obj.Value,
-                Text: obj.Text
+                Text: obj.Text,
+                DataType: obj.DataType
             });
         }
     });
