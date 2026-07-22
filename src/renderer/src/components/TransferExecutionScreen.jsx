@@ -87,6 +87,16 @@ const formatElapsedTime = milliseconds => {
             : `${seconds}s`;
 };
 
+const formatAverageDuration = milliseconds => {
+    if (!Number.isFinite(milliseconds) || milliseconds < 0) return '-';
+    if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
+    if (milliseconds < 60000) {
+        const precision = milliseconds < 10000 ? 1 : 0;
+        return `${(milliseconds / 1000).toFixed(precision)}s`;
+    }
+    return formatElapsedTime(milliseconds);
+};
+
 const ExecutionDateValue = ({ timestamp }) => {
     const value = formatExecutionTime(timestamp);
     if (value === '-') return <span className="execution-time-empty">-</span>;
@@ -189,6 +199,21 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const countSysErrs = logs.filter(l => l.status === 'Error').length;
     const countValErrs = logs.filter(l => l.status === 'ValidationError').length;
     const totalErrs = countSysErrs + countValErrs;
+    const averageRowDurationMs = React.useMemo(() => {
+        let totalDuration = 0;
+        let completedRows = 0;
+
+        logs.forEach(log => {
+            const match = /^([\d.]+)ms$/.exec(String(log.duration || ''));
+            if (!match) return;
+            const duration = Number(match[1]);
+            if (!Number.isFinite(duration)) return;
+            totalDuration += duration;
+            completedRows += 1;
+        });
+
+        return completedRows > 0 ? totalDuration / completedRows : null;
+    }, [logs]);
 
     const handleRetry = () => {
         setSearchText('');
@@ -985,6 +1010,10 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                         <div className="execution-time-stat">
                             <div className="execution-time-label">Elapsed</div>
                             <div className="execution-time-value">{executionTiming.startedAt ? formatElapsedTime(executionTiming.elapsedMs) : '-'}</div>
+                        </div>
+                        <div className="execution-time-stat">
+                            <div className="execution-time-label" title="Average processing time per completed row">Avg. Row</div>
+                            <div className="execution-time-value">{formatAverageDuration(averageRowDurationMs)}</div>
                         </div>
                     </div>
                 </div>
