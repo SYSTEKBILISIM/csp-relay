@@ -1,3 +1,7 @@
+const normalizeControlText = value => value === null || value === undefined
+    ? null
+    : String(value);
+
 /**
  * Constructs the payload for the transfer API based on Transaction Type.
  * @param {string} transactionType - CreateFlow, CreateForm, EditForm
@@ -56,7 +60,7 @@ export const constructPayload = (transactionType, config, mappedObjects, objectD
             formObjects.push({
                 FieldName: obj.FieldName,
                 Value: obj.Value,
-                Text: obj.Text,
+                Text: normalizeControlText(obj.Text),
                 DataType: obj.DataType
             });
         }

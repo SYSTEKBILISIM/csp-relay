@@ -6,6 +6,10 @@ const RELAY_CSP_APP_NAME = 'Systek_SynergyCSPRelay';
 const DEFAULT_API_PAGE_SIZE = 200;
 const RELAY_UPLOAD_CHUNK_BYTES = 2.5 * 1024 * 1024;
 
+const normalizeControlText = value => value === null || value === undefined
+    ? null
+    : String(value);
+
 async function fetchWithRetry(url, options, maxRetries = 3) {
     for (let i = 0; i <= maxRetries; i++) {
         try {
@@ -1349,7 +1353,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     rowObjects.push({
                         FieldName: colDef.name,
                         Value: result.Value,
-                        Text: result.Text,
+                        Text: normalizeControlText(result.Text),
                         DataType: colDef.mapping?.dataType || colDef.dataType || 'String',
                         Type: 'Object'
                     });
@@ -1401,7 +1405,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         objects.push({
                             FieldName: obj.FieldName,
                             Value: obj.Value,
-                            Text: obj.Text,
+                            Text: normalizeControlText(obj.Text),
                             DataType: obj.DataType
                         });
                     }
@@ -1600,7 +1604,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     rowObj = {
                         FieldName: def.name,
                         Value: result.Value,
-                        Text: result.Text,
+                        Text: normalizeControlText(result.Text),
                         DataType: mapping.dataType || 'String',
                         Type: 'Object'
                     };

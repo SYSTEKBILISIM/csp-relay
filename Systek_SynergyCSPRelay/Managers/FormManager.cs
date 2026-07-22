@@ -276,6 +276,7 @@ namespace Ataven.Managers
                 try
                 {
                     object normalizedValue = NormalizeControlValue(obj.Value, obj.DataType);
+                    string normalizedText = obj.Text?.ToString();
 
                     if (formInstance.Controls[obj.FieldName].Type == "Lookup")
                     {
@@ -288,15 +289,15 @@ namespace Ataven.Managers
 
                         if (normalizedValue != null && (!(normalizedValue is string strValueLookup) || !string.IsNullOrWhiteSpace(strValueLookup)))
                             formInstance.Controls[obj.FieldName].Value = values;
-                        if (!string.IsNullOrWhiteSpace(obj.Text))
-                            formInstance.Controls[obj.FieldName].Text = obj.Text;
+                        if (!string.IsNullOrWhiteSpace(normalizedText))
+                            formInstance.Controls[obj.FieldName].Text = normalizedText;
                         continue;
                     }
 
                     if (normalizedValue != null && (!(normalizedValue is string strValueObject) || !string.IsNullOrWhiteSpace(strValueObject)))
                         formInstance.Controls[obj.FieldName].Value = normalizedValue;
-                    if (!string.IsNullOrWhiteSpace(obj.Text))
-                        formInstance.Controls[obj.FieldName].Text = obj.Text;
+                    if (!string.IsNullOrWhiteSpace(normalizedText))
+                        formInstance.Controls[obj.FieldName].Text = normalizedText;
                 }
                 catch (Exception ex)
                 {
@@ -327,7 +328,7 @@ namespace Ataven.Managers
                             GridDataRowCell cell = new GridDataRowCell();
                             cell.Name = obj.FieldName;
                             cell.Value = NormalizeControlValue(obj.Value, obj.DataType);
-                            cell.Text = obj.Text;
+                            cell.Text = obj.Text?.ToString();
                             newRow.Cells.Add(cell);
                         }
                         grid.Rows.Add(newRow);
