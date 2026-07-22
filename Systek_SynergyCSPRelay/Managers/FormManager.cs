@@ -297,12 +297,7 @@ namespace Ataven.Managers
                     if (!string.IsNullOrWhiteSpace(normalizedText))
                         formInstance.Controls[obj.FieldName].Text = normalizedText;
                     if (normalizedValue != null && (!(normalizedValue is string strValueObject) || !string.IsNullOrWhiteSpace(strValueObject)))
-                    {
                         formInstance.Controls[obj.FieldName].Value = normalizedValue;
-
-                        if (formInstance.Controls[obj.FieldName] is ComboBox comboBox && comboBox.SelectedItem != null)
-                            comboBox.SelectedItem.Value = normalizedValue;
-                    }
                 }
                 catch (Exception ex)
                 {
