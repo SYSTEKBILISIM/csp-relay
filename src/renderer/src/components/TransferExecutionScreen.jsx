@@ -157,6 +157,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const searchInputRef = useRef(null);
     const queueTableRef = useRef(null);
     const resultsTableRef = useRef(null);
+    const selectionAnchorKeyRef = useRef(null);
     const [resultColWidths, setResultColWidths] = useState({
         id: 50,
         status: 150,
@@ -830,8 +831,54 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             }
             setSelectedRowKeys(newSelectedRowKeys);
         },
+        renderCell: (checked, record, index, originNode) => (
+            <span
+                style={{ display: 'inline-flex' }}
+                onClickCapture={(event) => {
+                    if (loading || isPaused || record.status !== 'Pending') return;
+
+                    const anchorKey = selectionAnchorKeyRef.current;
+                    if (!event.shiftKey || anchorKey === null) {
+                        selectionAnchorKeyRef.current = record.key;
+                        return;
+                    }
+
+                    const anchorIndex = logs.findIndex(log => log.key === anchorKey);
+                    const targetIndex = logs.findIndex(log => log.key === record.key);
+                    if (anchorIndex === -1 || targetIndex === -1) {
+                        selectionAnchorKeyRef.current = record.key;
+                        return;
+                    }
+
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    const rangeStart = Math.min(anchorIndex, targetIndex);
+                    const rangeEnd = Math.max(anchorIndex, targetIndex);
+                    const rangeKeys = logs
+                        .slice(rangeStart, rangeEnd + 1)
+                        .filter(log => log.status === 'Pending')
+                        .map(log => log.key);
+                    const nextSelectedKeys = new Set(selectedRowKeys);
+                    const shouldSelectRange = !checked;
+
+                    for (const key of rangeKeys) {
+                        if (shouldSelectRange) {
+                            nextSelectedKeys.add(key);
+                        } else {
+                            nextSelectedKeys.delete(key);
+                        }
+                    }
+
+                    selectionAnchorKeyRef.current = record.key;
+                    setSelectedRowKeys([...nextSelectedKeys]);
+                }}
+            >
+                {originNode}
+            </span>
+        ),
         getCheckboxProps: (record) => ({
-            disabled: loading || record.status !== 'Pending',
+            disabled: loading || isPaused || record.status !== 'Pending',
         }),
     };
 
