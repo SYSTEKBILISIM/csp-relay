@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream } from 'fs'
-import { appendFile, mkdir, open, stat, writeFile } from 'fs/promises'
+import { appendFile, copyFile, mkdir, open, stat, writeFile } from 'fs/promises'
 import { createInterface } from 'readline'
 import { dirname, join } from 'path'
 import { optimizeLogValue } from '../shared/logValueOptimizer'
@@ -11,6 +11,7 @@ export class TransferLogStore {
         this.preferredDirectory = join(baseDirectory, 'logs')
         this.directory = this.preferredDirectory
         this.filePath = join(this.directory, 'active-transfer-log.jsonl')
+        this.previousFilePath = join(this.directory, 'last-transfer-log.jsonl')
         this.index = new Map()
         this.byteOffset = 0
         this.writeQueue = Promise.resolve()
@@ -29,21 +30,116 @@ export class TransferLogStore {
             await probe.close()
         }
         this.filePath = join(this.directory, 'active-transfer-log.jsonl')
-        try {
-            this.byteOffset = (await stat(this.filePath)).size
-        } catch {
-            this.byteOffset = 0
-        }
+        this.previousFilePath = join(this.directory, 'last-transfer-log.jsonl')
+        const scan = await this.scanFile(this.filePath)
+        this.index = new Map([...scan.records].map(([key, value]) => [key, value.location]))
+        this.byteOffset = scan.size
         return this.filePath
     }
 
     reset() {
         this.writeQueue = this.writeQueue.then(async () => {
+            if (this.index.size > 0) {
+                await copyFile(this.filePath, this.previousFilePath)
+            }
             await writeFile(this.filePath, '', 'utf8')
             this.index.clear()
             this.byteOffset = 0
         })
         return this.writeQueue.then(() => ({ success: true, filePath: this.filePath }))
+    }
+
+    async scanFile(filePath) {
+        let fileStats
+        try {
+            fileStats = await stat(filePath)
+        } catch {
+            return { filePath, size: 0, modifiedAt: null, invalidLineCount: 0, records: new Map() }
+        }
+
+        const records = new Map()
+        const input = createInterface({
+            input: createReadStream(filePath, { encoding: 'utf8' }),
+            crlfDelay: Infinity
+        })
+        let currentOffset = 0
+        let invalidLineCount = 0
+
+        for await (const line of input) {
+            const contentLength = Buffer.byteLength(line)
+            const lineLength = contentLength + (currentOffset + contentLength < fileStats.size ? 1 : 0)
+            if (line) {
+                try {
+                    const record = JSON.parse(line)
+                    if (record.key !== undefined && record.key !== null) {
+                        records.set(String(record.key), {
+                            location: { offset: currentOffset, length: lineLength },
+                            record
+                        })
+                    }
+                } catch {
+                    // A power/network interruption can leave the last JSONL line incomplete.
+                    // Keep every valid record and report the skipped line to the viewer.
+                    invalidLineCount += 1
+                }
+            }
+            currentOffset += lineLength
+        }
+
+        return {
+            filePath,
+            size: fileStats.size,
+            modifiedAt: fileStats.mtime.toISOString(),
+            invalidLineCount,
+            records
+        }
+    }
+
+    async listRecoverable() {
+        await this.writeQueue
+        const candidates = [
+            { id: 'active', label: 'Interrupted / current transfer', filePath: this.filePath },
+            { id: 'previous', label: 'Previous transfer', filePath: this.previousFilePath }
+        ]
+        const sessions = []
+
+        for (const candidate of candidates) {
+            const scan = await this.scanFile(candidate.filePath)
+            if (scan.records.size === 0) continue
+            sessions.push({
+                id: candidate.id,
+                label: candidate.label,
+                recordCount: scan.records.size,
+                modifiedAt: scan.modifiedAt,
+                invalidLineCount: scan.invalidLineCount,
+                filePath: candidate.filePath
+            })
+        }
+
+        return sessions.sort((a, b) => new Date(b.modifiedAt) - new Date(a.modifiedAt))
+    }
+
+    async recover(sessionId = 'latest') {
+        await this.writeQueue
+        const sessions = await this.listRecoverable()
+        const selected = sessionId === 'latest'
+            ? sessions[0]
+            : sessions.find(session => session.id === sessionId)
+        if (!selected) return null
+
+        const scan = await this.scanFile(selected.filePath)
+        const results = [...scan.records.values()]
+            .sort((a, b) => a.location.offset - b.location.offset)
+            .map(value => value.record)
+
+        return {
+            recovered: true,
+            recoverySource: selected.label,
+            sourceFile: selected.filePath,
+            recoveryWarningCount: scan.invalidLineCount,
+            exportDate: new Date(selected.modifiedAt).toLocaleString(),
+            results
+        }
     }
 
     append(key, data) {

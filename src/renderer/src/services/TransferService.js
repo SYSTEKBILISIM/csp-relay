@@ -5,6 +5,7 @@ import { constructPayload } from './PayloadFactory';
 const RELAY_CSP_APP_NAME = 'Systek_SynergyCSPRelay';
 const DEFAULT_API_PAGE_SIZE = 200;
 const RELAY_UPLOAD_CHUNK_BYTES = 2.5 * 1024 * 1024;
+const RELAY_SESSION_FILE_CHUNK_CHARS = 2 * 1024 * 1024;
 
 const normalizeControlText = value => value === null || value === undefined
     ? null
@@ -381,6 +382,94 @@ function fileInfoToRelatedDocumentItem(fileInfo, targetPath = null, category = n
         Category: category || null,
         Path: normalizeDocumentTargetPath(targetPath) || null
     };
+}
+
+function collectEmbeddedRelatedDocumentItems(rows = []) {
+    const items = [];
+    const visitRows = relatedRows => {
+        for (const row of relatedRows || []) {
+            const formFields = row?.FormFields;
+            for (const relatedDocuments of formFields?.RelatedDocuments || []) {
+                for (const item of relatedDocuments?.Items || []) {
+                    if (!item?.FileSecretKey && typeof item?.Data === 'string' && item.Data.length > 0) {
+                        items.push(item);
+                    }
+                }
+            }
+            for (const nestedGrid of formFields?.RelatedGrids || []) {
+                visitRows(nestedGrid?.Rows || []);
+            }
+        }
+    };
+    visitRows(rows);
+    return items;
+}
+
+async function stageRelatedGridFilesForSession(baseUrl, headers, sessionId, rows, executionLog) {
+    const embeddedItems = collectEmbeddedRelatedDocumentItems(rows);
+
+    for (const item of embeddedItems) {
+        const encodedData = item.Data;
+        const uploadToken = crypto.randomUUID().replace(/-/g, '');
+        const totalChunks = Math.ceil(encodedData.length / RELAY_SESSION_FILE_CHUNK_CHARS);
+
+        for (let chunkStart = 0, chunkIndex = 1; chunkStart < encodedData.length; chunkStart += RELAY_SESSION_FILE_CHUNK_CHARS, chunkIndex++) {
+            const chunkData = encodedData.slice(chunkStart, chunkStart + RELAY_SESSION_FILE_CHUNK_CHARS);
+            const uploadBody = {
+                SessionId: sessionId,
+                UploadToken: uploadToken,
+                Data: chunkData,
+                DataLength: chunkData.length,
+                ChunkStart: chunkStart,
+                TotalEncodedLength: encodedData.length
+            };
+            const uploadUrl = `${baseUrl}/UploadSessionFileChunk`;
+            const uploadLog = {
+                key: `session_file_chunk_${Date.now()}_${Math.random()}`,
+                step: 'UploadSessionFileChunk',
+                details: `${item.Name || 'RelatedDocument'}: chunk ${chunkIndex}/${totalChunks}`,
+                status: 'Pending'
+            };
+            executionLog.push(uploadLog);
+
+            const response = await fetchWithRetry(uploadUrl, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(uploadBody)
+            });
+            const responseBody = response.ok ? await response.json() : await response.text();
+            uploadLog.raw = {
+                request: {
+                    url: uploadUrl,
+                    method: 'POST',
+                    headers,
+                    body: {
+                        ...uploadBody,
+                        Data: `[OMITTED ${chunkData.length} BASE64 CHARACTERS]`
+                    }
+                },
+                response: responseBody
+            };
+
+            if (!response.ok) {
+                uploadLog.status = 'Error';
+                const error = new Error(`UploadSessionFileChunk failed for "${item.Name || 'RelatedDocument'}" chunk ${chunkIndex}/${totalChunks} (HTTP ${response.status} ${response.statusText})`);
+                error.rawResponse = responseBody;
+                throw error;
+            }
+            uploadLog.status = 'Success';
+        }
+
+        item.TransferFileToken = uploadToken;
+        delete item.Data;
+    }
+}
+
+function hasEmbeddedRelatedGridFiles(flowPayload) {
+    if (!Array.isArray(flowPayload?.FlowDocuments)) return false;
+    return flowPayload.FlowDocuments.some(document =>
+        collectEmbeddedRelatedDocumentItems(document?.FormFields?.RelatedGrids?.flatMap(grid => grid?.Rows || []) || []).length > 0
+    );
 }
 
 function normalizeDocumentTargetPath(path) {
@@ -1697,11 +1786,13 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             return responseBody;
         };
 
-        if (usesDuplicateGridPrevention(definitionData.objects || [])) {
+        const needsUniqueGridColumns = usesDuplicateGridPrevention(definitionData.objects || []);
+        const needsSessionFileChunks = transactionType === 'CreateFlow' && hasEmbeddedRelatedGridFiles(payload);
+        if (needsUniqueGridColumns || needsSessionFileChunks) {
             const capabilityLog = {
                 key: `capabilities_${Date.now()}_${Math.random()}`,
                 step: 'Relay Capability Check',
-                details: 'Checking duplicate grid row support',
+                details: 'Checking required relay capabilities',
                 status: 'Pending'
             };
             executionLog.push(capabilityLog);
@@ -1709,9 +1800,13 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             try {
                 const capabilities = await postTransferJson('Capabilities', {}, capabilityLog);
                 const supportsUniqueGridColumns = capabilities?.uniqueGridColumns === true || capabilities?.UniqueGridColumns === true;
-                if (!supportsUniqueGridColumns) throw new Error('The deployed relay does not report duplicate grid row support.');
+                const supportsSessionFileChunks = capabilities?.sessionFileChunks === true || capabilities?.SessionFileChunks === true;
+                if (needsUniqueGridColumns && !supportsUniqueGridColumns)
+                    throw new Error('The deployed relay does not report duplicate grid row support.');
+                if (needsSessionFileChunks && !supportsSessionFileChunks)
+                    throw new Error('The deployed relay does not report RelatedGrid session file chunk support.');
                 capabilityLog.status = 'Success';
-                capabilityLog.details = 'Duplicate grid row support is active';
+                capabilityLog.details = 'Required relay capabilities are active';
             } catch (error) {
                 capabilityLog.status = 'Error';
                 capabilityLog.details = 'The deployed Systek_SynergyCSPRelay project is outdated. Build and deploy the updated CSP project before running this transfer.';
@@ -1767,6 +1862,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 const rows = job.relatedGrid.Rows || [];
                 for (let i = 0; i < rows.length; i += relatedGridChunkSize) {
                     const chunkRows = rows.slice(i, i + relatedGridChunkSize);
+                    await stageRelatedGridFilesForSession(baseUrl, headers, sessionId, chunkRows, executionLog);
                     const appendBody = {
                         SessionId: sessionId,
                         DocumentName: job.documentName,
@@ -1800,10 +1896,11 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             responseStatus = 200;
             responseStatusText = 'OK';
         } else {
+            const requestPayload = transactionType === 'CreateFlow' ? beginPayload : payload;
             const response = await fetchWithRetry(`${baseUrl}/${endpointStr}`, {
                 method: 'POST',
                 headers,
-                body: JSON.stringify(payload)
+                body: JSON.stringify(requestPayload)
             });
 
             responseOk = response.ok;

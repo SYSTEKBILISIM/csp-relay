@@ -10,6 +10,8 @@ const api = {
         append: (key, data) => ipcRenderer.invoke('transfer-log:append', { key, data }),
         get: (key) => ipcRenderer.invoke('transfer-log:get', key),
         getPath: () => ipcRenderer.invoke('transfer-log:path'),
+        listRecoverable: () => ipcRenderer.invoke('transfer-log:list-recoverable'),
+        recover: (sessionId = 'latest') => ipcRenderer.invoke('transfer-log:recover', sessionId),
         exportJson: (metadata, suggestedName) => ipcRenderer.invoke('transfer-log:export-json', { metadata, suggestedName })
     }
 }

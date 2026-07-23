@@ -32,7 +32,7 @@ namespace Systek_SynergyCSPRelay.Controllers
         [NoResponseHeaders]
         public IActionResult Capabilities()
         {
-            return Ok(new { UniqueGridColumns = true });
+            return Ok(new { UniqueGridColumns = true, SessionFileChunks = true });
         }
 
         [HttpPost]
@@ -92,6 +92,25 @@ namespace Systek_SynergyCSPRelay.Controllers
                 var serviceAPI = CreateServiceAPIFromHeaders();
                 var sessionManager = new TransferSessionManager(serviceAPI);
                 var response = sessionManager.AppendRelatedGridRows(request);
+                return Task.FromResult<IActionResult>(Ok(response));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromResult<IActionResult>(BadRequest(ex));
+            }
+        }
+
+        [HttpPost]
+        [ActionName("UploadSessionFileChunk")]
+        [NoRequestHeaders]
+        [NoResponseHeaders]
+        public Task<IActionResult> UploadSessionFileChunk([FromBody] UploadSessionFileChunkRequestModel request)
+        {
+            try
+            {
+                var serviceAPI = CreateServiceAPIFromHeaders();
+                var sessionManager = new TransferSessionManager(serviceAPI);
+                var response = sessionManager.UploadSessionFileChunk(request);
                 return Task.FromResult<IActionResult>(Ok(response));
             }
             catch (Exception ex)

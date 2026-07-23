@@ -5,10 +5,12 @@ import {
     InfoCircleOutlined, SearchOutlined, CopyOutlined, FileTextOutlined,
     CloudUploadOutlined, CloudDownloadOutlined, UnorderedListOutlined,
     CodeOutlined, CaretUpOutlined, CaretDownOutlined, EyeOutlined,
-    InboxOutlined, ImportOutlined, ArrowLeftOutlined, DeleteOutlined, CloseOutlined
+    InboxOutlined, ImportOutlined, ArrowLeftOutlined, DeleteOutlined, CloseOutlined,
+    HistoryOutlined
 } from '@ant-design/icons';
 import { motion, AnimatePresence } from 'framer-motion';
 import { LogDetailsModal, safeJsonFormat, CopyAnimatedButton } from './log/LogDetailsModal';
+import { logDB } from '../services/IndexedDBService';
 import '../assets/css/TransferExecutionScreen.css';
 
 const { Title, Text, Paragraph } = Typography;
@@ -69,6 +71,8 @@ export const LogViewer = ({ onBack }) => {
     const [previewModalVisible, setPreviewModalVisible] = useState(false);
     const [previewData, setPreviewData] = useState(null);
     const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+    const [recoverableSessions, setRecoverableSessions] = useState([]);
+    const [recoveryLoading, setRecoveryLoading] = useState(false);
 
     const searchInputRef = useRef(null);
     const tableContainerRef = useRef(null);
@@ -121,6 +125,12 @@ export const LogViewer = ({ onBack }) => {
         return () => clearTimeout(timer);
     }, [searchText]);
 
+    useEffect(() => {
+        logDB.listRecoverable()
+            .then(setRecoverableSessions)
+            .catch(error => console.error('Failed to inspect recoverable transfer logs:', error));
+    }, []);
+
     // Update currentMatchIndex when matches change
     useEffect(() => {
         if (matches.length > 0) {
@@ -148,8 +158,9 @@ export const LogViewer = ({ onBack }) => {
     const handleFileUpload = (file) => {
         const reader = new FileReader();
         reader.onload = (e) => {
+            const fileText = e.target.result;
             try {
-                const json = JSON.parse(e.target.result);
+                const json = JSON.parse(fileText);
                 if (!json.results) {
                     message.error("Invalid log file format. 'results' array is missing.");
                     return;
@@ -157,11 +168,61 @@ export const LogViewer = ({ onBack }) => {
                 setLogData(json);
                 message.success("Logs loaded successfully.");
             } catch (err) {
-                message.error("Failed to parse JSON file.");
+                const latestRecords = new Map();
+                let invalidLineCount = 0;
+                for (const line of fileText.split(/\r?\n/)) {
+                    if (!line.trim()) continue;
+                    try {
+                        const record = JSON.parse(line);
+                        if (record.key === undefined || record.key === null) {
+                            invalidLineCount += 1;
+                            continue;
+                        }
+                        latestRecords.set(String(record.key), record);
+                    } catch {
+                        invalidLineCount += 1;
+                    }
+                }
+
+                if (latestRecords.size === 0) {
+                    message.error("Failed to parse the JSON/JSONL log file.");
+                    return;
+                }
+
+                const results = [...latestRecords.values()];
+                setLogData({
+                    recovered: true,
+                    recoverySource: 'selected JSONL file',
+                    recoveryWarningCount: invalidLineCount,
+                    exportDate: new Date(file.lastModified).toLocaleString(),
+                    results
+                });
+                message.success(`${results.length} rows recovered from the JSONL file.`);
             }
         };
         reader.readAsText(file);
         return false; // Prevent auto-upload
+    };
+
+    const handleRecoverLastTransfer = async () => {
+        setRecoveryLoading(true);
+        try {
+            const recovered = await logDB.recover('latest');
+            if (!recovered?.results?.length) {
+                message.warning('No recoverable transfer log was found.');
+                setRecoverableSessions([]);
+                return;
+            }
+            setLogData(recovered);
+            const warning = recovered.recoveryWarningCount
+                ? ` ${recovered.recoveryWarningCount} incomplete log line was skipped.`
+                : '';
+            message.success(`${recovered.results.length} rows recovered.${warning}`);
+        } catch (error) {
+            message.error(`Failed to recover the last transfer: ${error.message}`);
+        } finally {
+            setRecoveryLoading(false);
+        }
     };
 
     const clearLogs = () => {
@@ -346,11 +407,37 @@ export const LogViewer = ({ onBack }) => {
                                     <CloudUploadOutlined style={{ color: '#3b82f6', fontSize: 24 }} />
                                 </div>
                                 <Title level={4} style={{ margin: '0 0 4px 0', color: '#1e293b' }}>Load Transfer Logs</Title>
-                                <Text type="secondary" style={{ fontSize: 13 }}>Select the .json log file exported during transfer</Text>
+                                <Text type="secondary" style={{ fontSize: 13 }}>Recover the last session or select an exported .json log</Text>
                             </div>
 
+                            {recoverableSessions.length > 0 && (
+                                <Alert
+                                    type="warning"
+                                    showIcon
+                                    icon={<HistoryOutlined />}
+                                    style={{ marginBottom: 20, textAlign: 'left' }}
+                                    message="A recoverable transfer log was found"
+                                    description={
+                                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                            <Text>
+                                                {recoverableSessions[0].recordCount} processed rows · {new Date(recoverableSessions[0].modifiedAt).toLocaleString()}
+                                            </Text>
+                                            <Button
+                                                type="primary"
+                                                icon={<HistoryOutlined />}
+                                                loading={recoveryLoading}
+                                                onClick={handleRecoverLastTransfer}
+                                                block
+                                            >
+                                                Recover Last Transfer
+                                            </Button>
+                                        </Space>
+                                    }
+                                />
+                            )}
+
                             <Dragger
-                                accept=".json"
+                                accept=".json,.jsonl"
                                 multiple={false}
                                 beforeUpload={handleFileUpload}
                                 showUploadList={false}
@@ -369,13 +456,25 @@ export const LogViewer = ({ onBack }) => {
                                     Click or drag JSON file here
                                 </p>
                                 <p className="ant-upload-hint" style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
-                                    Comprehensive JSON exports only
+                                    Exported JSON or persisted active-transfer-log.jsonl
                                 </p>
                             </Dragger>
                         </Card>
                     </motion.div>
                 ) : (
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                        {logData.recovered && (
+                            <Alert
+                                type={logData.recoveryWarningCount ? 'warning' : 'success'}
+                                showIcon
+                                closable
+                                style={{ marginBottom: 12 }}
+                                message={`${logData.results.length} rows recovered from ${logData.recoverySource.toLocaleLowerCase()}`}
+                                description={logData.recoveryWarningCount
+                                    ? `${logData.recoveryWarningCount} incomplete/corrupt line was skipped; all intact rows are shown.`
+                                    : 'The persisted on-disk log was read successfully.'}
+                            />
+                        )}
                         <Row gutter={16} style={{ marginBottom: 12 }}>
                             <Col span={8}>
                                 <Card size="small" style={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>

@@ -30,6 +30,16 @@ class FileLogService {
         return this.api.getPath()
     }
 
+    async listRecoverable() {
+        if (!this.api) return []
+        return this.api.listRecoverable()
+    }
+
+    async recover(sessionId = 'latest') {
+        if (!this.api) return null
+        return this.api.recover(sessionId)
+    }
+
     async exportJson(metadata, suggestedName) {
         if (!this.api) throw new Error('File log API is unavailable.')
         return this.api.exportJson(metadata, suggestedName)

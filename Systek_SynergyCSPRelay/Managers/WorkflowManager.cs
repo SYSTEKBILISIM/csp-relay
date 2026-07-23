@@ -19,10 +19,10 @@ namespace Ataven.Managers
         {
             var createFlow = _serviceAPI.WorkflowManager.Create(request.ProjectName, request.FlowName, 0).Result;
             createFlow.StartingEvent = createFlow.Events[request.StartingEvent];
+            FormManager formManager = new FormManager(_serviceAPI);
             foreach(FlowDocumentModel fd in request.FlowDocuments) {
                 var formInstance = createFlow.Documents[fd.DocumentName].FormInstance;
-                FormManager formManager = new FormManager(_serviceAPI);
-                SaveFormResultModel formResult = formManager.SaveForm(formInstance, fd.FormFields, fd.FormParameters).Result;
+                formManager.PrepareForm(formInstance, fd.FormFields, fd.FormParameters);
             }
 
             if(request.FlowParameters != null)

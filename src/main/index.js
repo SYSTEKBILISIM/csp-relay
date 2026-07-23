@@ -88,6 +88,14 @@ app.whenReady().then(() => {
         await transferLogReady
         return transferLogStore.filePath
     })
+    ipcMain.handle('transfer-log:list-recoverable', async () => {
+        await transferLogReady
+        return transferLogStore.listRecoverable()
+    })
+    ipcMain.handle('transfer-log:recover', async (_event, sessionId) => {
+        await transferLogReady
+        return transferLogStore.recover(sessionId)
+    })
     ipcMain.handle('transfer-log:export-json', async (_event, { metadata, suggestedName }) => {
         await transferLogReady
         const result = await dialog.showSaveDialog({
