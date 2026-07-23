@@ -69,7 +69,18 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         endedAt: null,
         elapsedMs: 0
     });
-    const executionTimingRef = useRef({ startedAt: null, endedAt: null });
+    const executionTimingRef = useRef({
+        startedAt: null,
+        endedAt: null,
+        pausedAt: null,
+        totalPausedMs: 0
+    });
+    const estimationRef = useRef({
+        processedCount: 0,
+        durationAccumulator: 0,
+        workUnitsAccumulator: 0,
+        remainingMs: null
+    });
     const [isComplete, setIsComplete] = useState(false);
     const [excelData, setExcelData] = useState([]);
 
@@ -131,9 +142,10 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         if (!loading || !executionTimingRef.current.startedAt) return undefined;
 
         const updateElapsed = () => {
+            const timing = executionTimingRef.current;
             setExecutionTiming(prev => ({
                 ...prev,
-                elapsedMs: Date.now() - executionTimingRef.current.startedAt
+                elapsedMs: Date.now() - timing.startedAt - timing.totalPausedMs
             }));
         };
 
@@ -202,11 +214,15 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         } else if (isPaused || isPausedRef.current) {
             // If already paused, we can stop immediately as nothing is running
             const endedAt = Date.now();
+            const timing = executionTimingRef.current;
+            const currentPauseMs = timing.pausedAt ? endedAt - timing.pausedAt : 0;
             executionTimingRef.current.endedAt = endedAt;
             setExecutionTiming(prev => ({
                 ...prev,
                 endedAt,
-                elapsedMs: prev.startedAt ? endedAt - prev.startedAt : 0
+                elapsedMs: prev.startedAt
+                    ? endedAt - prev.startedAt - timing.totalPausedMs - currentPauseMs
+                    : 0
             }));
             const remainingRows = getExecutableRows(wasRetryContextRef.current);
             const canResume = remainingRows.length > 0;
@@ -237,13 +253,24 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         return log.status === 'Pending';
     });
 
+    const getRemainingRowCount = (isRetryContext = false) => logsStateRef.current.filter(log => {
+        if (!selectedRowKeysRef.current.includes(log.key)) return false;
+        if (log.status === 'Processing') return true;
+        if (isRetryContext) return log.status === 'Error' || log.status === 'ValidationError';
+        return log.status === 'Pending';
+    }).length;
+
     const finishTransfer = () => {
         const endedAt = Date.now();
+        const timing = executionTimingRef.current;
+        const currentPauseMs = timing.pausedAt ? endedAt - timing.pausedAt : 0;
         executionTimingRef.current.endedAt = endedAt;
         setExecutionTiming(prev => ({
             ...prev,
             endedAt,
-            elapsedMs: prev.startedAt ? endedAt - prev.startedAt : 0
+            elapsedMs: prev.startedAt
+                ? endedAt - prev.startedAt - timing.totalPausedMs - currentPauseMs
+                : 0
         }));
         setLoading(false);
         setIsPaused(false);
@@ -314,14 +341,40 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
         if (!isResuming) {
             const startedAt = Date.now();
-            executionTimingRef.current = { startedAt, endedAt: null };
+            executionTimingRef.current = {
+                startedAt,
+                endedAt: null,
+                pausedAt: null,
+                totalPausedMs: 0
+            };
+            estimationRef.current = {
+                processedCount: 0,
+                durationAccumulator: 0,
+                workUnitsAccumulator: 0,
+                remainingMs: null
+            };
             setExecutionTiming({ startedAt, endedAt: null, elapsedMs: 0 });
             setEstimatedTime(null);
             setEstimatedFinishAt(null);
             apiCache.current = new Map();
         } else {
-            executionTimingRef.current.endedAt = null;
-            setExecutionTiming(prev => ({ ...prev, endedAt: null }));
+            const resumedAt = Date.now();
+            const timing = executionTimingRef.current;
+            if (timing.pausedAt) {
+                timing.totalPausedMs += resumedAt - timing.pausedAt;
+            }
+            timing.pausedAt = null;
+            timing.endedAt = null;
+            setExecutionTiming(prev => ({
+                ...prev,
+                endedAt: null,
+                elapsedMs: prev.startedAt
+                    ? resumedAt - prev.startedAt - timing.totalPausedMs
+                    : 0
+            }));
+            if (Number.isFinite(estimationRef.current.remainingMs)) {
+                setEstimatedFinishAt(resumedAt + estimationRef.current.remainingMs);
+            }
         }
 
         setLoading(true);
@@ -339,26 +392,28 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setIsPaused(false);
         isPausedRef.current = false;
 
-        let sessionProcessedCount = 0;
-        let sessionDurationAccumulator = 0;
-        let sessionWorkUnitsAccumulator = 0;
         const rowConcurrency = executionModeRef.current === 'parallel'
             ? Math.min(PARALLEL_ROW_LIMIT, pendingRows.length)
             : 1;
 
         const updateEstimatedTimeFromWork = () => {
-            if (sessionProcessedCount === 0) return;
+            const estimation = estimationRef.current;
+            if (estimation.processedCount === 0) return;
 
-            const avgMillisPerWorkUnit = sessionDurationAccumulator / Math.max(sessionWorkUnitsAccumulator, DEFAULT_WORK_UNITS);
-            const avgWorkUnitsPerRow = sessionWorkUnitsAccumulator / sessionProcessedCount;
-            const remainingRows = Math.max(pendingRows.length - sessionProcessedCount, 0);
+            const avgMillisPerWorkUnit = estimation.durationAccumulator
+                / Math.max(estimation.workUnitsAccumulator, DEFAULT_WORK_UNITS);
+            const avgWorkUnitsPerRow = estimation.workUnitsAccumulator / estimation.processedCount;
+            const remainingRows = getRemainingRowCount(isRetryContext);
             const remainingWorkUnits = remainingRows * avgWorkUnitsPerRow;
-            const estSecs = (avgMillisPerWorkUnit * remainingWorkUnits) / (1000 * rowConcurrency);
+            const remainingMs = (avgMillisPerWorkUnit * remainingWorkUnits) / rowConcurrency;
+            const estSecs = remainingMs / 1000;
+            estimation.remainingMs = remainingMs;
 
             if (remainingRows > 0) {
                 setEstimatedTime(formatEstimatedSeconds(estSecs));
-                setEstimatedFinishAt(Date.now() + Math.max(0, estSecs * 1000));
+                setEstimatedFinishAt(Date.now() + Math.max(0, remainingMs));
             } else {
+                estimation.remainingMs = 0;
                 setEstimatedTime('0s');
                 setEstimatedFinishAt(Date.now());
             }
@@ -405,8 +460,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 activeLog.message = result.message;
                 activeLog.duration = `${duration}ms`;
                 activeLog.timestamp = new Date().toLocaleString();
-                sessionDurationAccumulator += duration;
-                sessionWorkUnitsAccumulator += activeLog.workUnits;
+                estimationRef.current.durationAccumulator += duration;
+                estimationRef.current.workUnitsAccumulator += activeLog.workUnits;
             } catch (err) {
                 console.error(err);
                 const duration = Date.now() - iterStart;
@@ -424,8 +479,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 activeLog.duration = `${duration}ms`;
                 activeLog.timestamp = new Date().toLocaleString();
                 activeLog.workUnits = getExecutionWorkUnits(detailObj.executionLog);
-                sessionDurationAccumulator += duration;
-                sessionWorkUnitsAccumulator += activeLog.workUnits;
+                estimationRef.current.durationAccumulator += duration;
+                estimationRef.current.workUnitsAccumulator += activeLog.workUnits;
             }
 
             try {
@@ -434,7 +489,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 console.error('File Log Save Error:', e);
             }
 
-            sessionProcessedCount += 1;
+            estimationRef.current.processedCount += 1;
             if (isRetryContext) {
                 updateRetryState({ processed: retryStateRef.current.processed + 1 });
                 setStats(prev => ({ ...prev, retried: prev.retried + 1 }));
@@ -483,6 +538,14 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             const canResume = remainingRows.length > 0;
 
             if (canResume) {
+                const pausedAt = Date.now();
+                executionTimingRef.current.pausedAt = pausedAt;
+                setExecutionTiming(prev => ({
+                    ...prev,
+                    elapsedMs: prev.startedAt
+                        ? pausedAt - prev.startedAt - executionTimingRef.current.totalPausedMs
+                        : 0
+                }));
                 setIsPaused(true);
                 isPausedRef.current = true;
                 setIsComplete(false);
@@ -498,6 +561,14 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             const canResume = remainingRows.length > 0;
 
             if (canResume) {
+                const pausedAt = Date.now();
+                executionTimingRef.current.pausedAt = pausedAt;
+                setExecutionTiming(prev => ({
+                    ...prev,
+                    elapsedMs: prev.startedAt
+                        ? pausedAt - prev.startedAt - executionTimingRef.current.totalPausedMs
+                        : 0
+                }));
                 setIsPaused(true);
                 isPausedRef.current = true;
                 setIsComplete(false);
@@ -547,7 +618,18 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setProgress(0);
         setEstimatedTime(null);
         setEstimatedFinishAt(null);
-        executionTimingRef.current = { startedAt: null, endedAt: null };
+        executionTimingRef.current = {
+            startedAt: null,
+            endedAt: null,
+            pausedAt: null,
+            totalPausedMs: 0
+        };
+        estimationRef.current = {
+            processedCount: 0,
+            durationAccumulator: 0,
+            workUnitsAccumulator: 0,
+            remainingMs: null
+        };
         setExecutionTiming({ startedAt: null, endedAt: null, elapsedMs: 0 });
         setIsComplete(false);
         isRunning.current = false;
