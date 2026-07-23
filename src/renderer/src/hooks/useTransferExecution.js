@@ -7,6 +7,18 @@ import { logDB } from '../services/IndexedDBService';
 const DEFAULT_WORK_UNITS = 1;
 const PARALLEL_ROW_LIMIT = 5;
 
+const formatEstimatedSeconds = seconds => {
+    const totalSeconds = Math.max(0, Math.round(seconds));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+    return hours > 0
+        ? `${hours}h ${minutes}m ${remainingSeconds}s`
+        : minutes > 0
+            ? `${minutes}m ${remainingSeconds}s`
+            : `${remainingSeconds}s`;
+};
+
 // Reusable hook for transfer logic
 const cleanJson = (data) => {
     if (data === null || data === undefined) return null;
@@ -344,9 +356,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             const estSecs = (avgMillisPerWorkUnit * remainingWorkUnits) / (1000 * rowConcurrency);
 
             if (remainingRows > 0) {
-                const minutes = Math.floor(estSecs / 60);
-                const seconds = Math.round(estSecs % 60);
-                setEstimatedTime(minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`);
+                setEstimatedTime(formatEstimatedSeconds(estSecs));
                 setEstimatedFinishAt(Date.now() + Math.max(0, estSecs * 1000));
             } else {
                 setEstimatedTime('0s');
