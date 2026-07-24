@@ -81,6 +81,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         workUnitsAccumulator: 0,
         remainingMs: null
     });
+    const logSessionInitializedRef = useRef(false);
     const [isComplete, setIsComplete] = useState(false);
     const [excelData, setExcelData] = useState([]);
 
@@ -187,8 +188,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             setEstimatedTime(null);
             setEstimatedFinishAt(null);
             setIsComplete(false);
-            // Clear IndexedDB for a fresh start
-            logDB.clearAll().catch(console.error);
+            // Keep the previous on-disk session recoverable until a new transfer actually starts.
+            logSessionInitializedRef.current = false;
         }
     }, [definitionData]);
 
@@ -341,6 +342,27 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
         if (!isResuming) {
             const startedAt = Date.now();
+            if (!logSessionInitializedRef.current) {
+                try {
+                    await logDB.clearAll({
+                        projectName: definitionData?.projectName || 'Unnamed Project',
+                        transactionType: definitionData?.transactionType || 'N/A',
+                        deployAgent: definitionData?.deployAgent || 'N/A',
+                        flowName: definitionData?.flowName,
+                        formName: definitionData?.formName,
+                        flowDocumentName: definitionData?.flowDocumentName,
+                        startingEventCode: definitionData?.startingEventCode,
+                        mainIdColumn: definitionData?.mainIdColumn,
+                        mainSheet: definitionData?.mainSheet,
+                        fileName: definitionData?.fileName,
+                        transferStartedAt: new Date(startedAt).toLocaleString()
+                    });
+                    logSessionInitializedRef.current = true;
+                } catch (error) {
+                    message.error(`Transfer log could not be initialized: ${error.message}`);
+                    return;
+                }
+            }
             executionTimingRef.current = {
                 startedAt,
                 endedAt: null,
@@ -601,7 +623,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     };
 
     const resetTransfer = () => {
-        logDB.clearAll().catch(console.error);
+        logSessionInitializedRef.current = false;
         const resetLogs = logsStateRef.current.map(l => {
             return {
                 ...l,

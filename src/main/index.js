@@ -72,9 +72,9 @@ app.whenReady().then(() => {
         throw error
     })
 
-    ipcMain.handle('transfer-log:reset', async () => {
+    ipcMain.handle('transfer-log:reset', async (_event, metadata = {}) => {
         await transferLogReady
-        return transferLogStore.reset()
+        return transferLogStore.reset(metadata)
     })
     ipcMain.handle('transfer-log:append', async (_event, { key, data }) => {
         await transferLogReady
@@ -105,6 +105,16 @@ app.whenReady().then(() => {
         })
         if (result.canceled || !result.filePath) return { success: false, canceled: true }
         return transferLogStore.exportJson(result.filePath, metadata)
+    })
+    ipcMain.handle('transfer-log:export-data-json', async (_event, { data, suggestedName }) => {
+        await transferLogReady
+        const result = await dialog.showSaveDialog({
+            title: 'Export Recovered Transfer Logs',
+            defaultPath: join(app.getPath('downloads'), suggestedName || `Recovered_Transfer_Logs_${Date.now()}.json`),
+            filters: [{ name: 'JSON Files', extensions: ['json'] }]
+        })
+        if (result.canceled || !result.filePath) return { success: false, canceled: true }
+        return transferLogStore.exportDataJson(result.filePath, data)
     })
 
     // Set app user model id for windows

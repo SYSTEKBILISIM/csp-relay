@@ -20,9 +20,9 @@ class FileLogService {
         return this.api.get(key)
     }
 
-    async clearAll() {
+    async clearAll(metadata = {}) {
         if (!this.api) return
-        return this.api.reset()
+        return this.api.reset(metadata)
     }
 
     async getPath() {
@@ -43,6 +43,11 @@ class FileLogService {
     async exportJson(metadata, suggestedName) {
         if (!this.api) throw new Error('File log API is unavailable.')
         return this.api.exportJson(metadata, suggestedName)
+    }
+
+    async exportDataJson(data, suggestedName) {
+        if (!this.api) throw new Error('File log API is unavailable.')
+        return this.api.exportDataJson(data, suggestedName)
     }
 }
 

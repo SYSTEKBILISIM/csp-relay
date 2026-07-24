@@ -6,9 +6,10 @@ import {
     CloudUploadOutlined, CloudDownloadOutlined, UnorderedListOutlined,
     CodeOutlined, CaretUpOutlined, CaretDownOutlined, EyeOutlined,
     InboxOutlined, ImportOutlined, ArrowLeftOutlined, DeleteOutlined, CloseOutlined,
-    HistoryOutlined
+    HistoryOutlined, FileExcelOutlined
 } from '@ant-design/icons';
 import { motion, AnimatePresence } from 'framer-motion';
+import * as XLSX from 'xlsx';
 import { LogDetailsModal, safeJsonFormat, CopyAnimatedButton } from './log/LogDetailsModal';
 import { logDB } from '../services/IndexedDBService';
 import '../assets/css/TransferExecutionScreen.css';
@@ -72,7 +73,8 @@ export const LogViewer = ({ onBack }) => {
     const [previewData, setPreviewData] = useState(null);
     const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
     const [recoverableSessions, setRecoverableSessions] = useState([]);
-    const [recoveryLoading, setRecoveryLoading] = useState(false);
+    const [recoveringSessionId, setRecoveringSessionId] = useState(null);
+    const [exportLoading, setExportLoading] = useState(null);
 
     const searchInputRef = useRef(null);
     const tableContainerRef = useRef(null);
@@ -169,11 +171,16 @@ export const LogViewer = ({ onBack }) => {
                 message.success("Logs loaded successfully.");
             } catch (err) {
                 const latestRecords = new Map();
+                let metadata = {};
                 let invalidLineCount = 0;
                 for (const line of fileText.split(/\r?\n/)) {
                     if (!line.trim()) continue;
                     try {
                         const record = JSON.parse(line);
+                        if (record.recordType === 'transfer-metadata' && record.metadata && typeof record.metadata === 'object') {
+                            metadata = record.metadata;
+                            continue;
+                        }
                         if (record.key === undefined || record.key === null) {
                             invalidLineCount += 1;
                             continue;
@@ -191,6 +198,7 @@ export const LogViewer = ({ onBack }) => {
 
                 const results = [...latestRecords.values()];
                 setLogData({
+                    ...metadata,
                     recovered: true,
                     recoverySource: 'selected JSONL file',
                     recoveryWarningCount: invalidLineCount,
@@ -204,10 +212,10 @@ export const LogViewer = ({ onBack }) => {
         return false; // Prevent auto-upload
     };
 
-    const handleRecoverLastTransfer = async () => {
-        setRecoveryLoading(true);
+    const handleRecoverTransfer = async (sessionId = 'latest') => {
+        setRecoveringSessionId(sessionId);
         try {
-            const recovered = await logDB.recover('latest');
+            const recovered = await logDB.recover(sessionId);
             if (!recovered?.results?.length) {
                 message.warning('No recoverable transfer log was found.');
                 setRecoverableSessions([]);
@@ -219,15 +227,69 @@ export const LogViewer = ({ onBack }) => {
                 : '';
             message.success(`${recovered.results.length} rows recovered.${warning}`);
         } catch (error) {
-            message.error(`Failed to recover the last transfer: ${error.message}`);
+            message.error(`Failed to recover the transfer: ${error.message}`);
         } finally {
-            setRecoveryLoading(false);
+            setRecoveringSessionId(null);
         }
     };
 
     const clearLogs = () => {
         setLogData(null);
         setSearchText('');
+    };
+
+    const handleExportExcel = async () => {
+        if (!logData?.results?.length) {
+            message.warning('No logs to export.');
+            return;
+        }
+        setExportLoading('excel');
+        try {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            const mainIdKey = logData.mainIdColumn || 'ID';
+            const exportData = logData.results.map(log => ({
+                '#': log.id,
+                Status: log.status,
+                [mainIdKey]: log.rowData?.[mainIdKey] ?? log.id ?? '-',
+                Message: log.message,
+                Timestamp: log.timestamp,
+                Duration: log.duration,
+                'Preview Data': log.rowData ? JSON.stringify(log.rowData) : '',
+                Payload: log.details?.payload ? JSON.stringify(log.details.payload, null, 2) : '',
+                Response: log.details?.response ? JSON.stringify(log.details.response, null, 2) : '',
+                OperationTree: log.details?.executionLog?.map(step => `[${step.status}] ${step.step} - ${step.details}`).join(' | ') || ''
+            }));
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(exportData), 'TransferLogs');
+            XLSX.writeFile(workbook, `Recovered_TransferLogs_${Date.now()}.xlsx`);
+            message.success('Recovered logs exported to Excel.');
+        } catch (error) {
+            message.error(`Failed to export Excel: ${error.message}`);
+        } finally {
+            setExportLoading(null);
+        }
+    };
+
+    const handleExportJson = async () => {
+        if (!logData?.results?.length) {
+            message.warning('No logs to export.');
+            return;
+        }
+        setExportLoading('json');
+        try {
+            const safeProjectName = String(logData.projectName || 'recovered').replace(/[<>:"/\\|?*]/g, '_');
+            const result = await logDB.exportDataJson(logData, `Recovered_Transfer_Logs_${safeProjectName}_${Date.now()}.json`);
+            if (result?.canceled) {
+                message.info('Log export canceled.');
+                return;
+            }
+            if (!result?.success) throw new Error(result?.error || 'The log file could not be exported.');
+            message.success(`Recovered logs exported to ${result.filePath}`);
+        } catch (error) {
+            message.error(`Failed to export JSON: ${error.message}`);
+        } finally {
+            setExportLoading(null);
+        }
     };
 
     const getColumnSearchProps = (dataIndex) => ({
@@ -416,21 +478,44 @@ export const LogViewer = ({ onBack }) => {
                                     showIcon
                                     icon={<HistoryOutlined />}
                                     style={{ marginBottom: 20, textAlign: 'left' }}
-                                    message="A recoverable transfer log was found"
+                                    message={`${recoverableSessions.length} recoverable transfer log${recoverableSessions.length > 1 ? 's were' : ' was'} found`}
                                     description={
                                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                            <Text>
-                                                {recoverableSessions[0].recordCount} processed rows · {new Date(recoverableSessions[0].modifiedAt).toLocaleString()}
-                                            </Text>
-                                            <Button
-                                                type="primary"
-                                                icon={<HistoryOutlined />}
-                                                loading={recoveryLoading}
-                                                onClick={handleRecoverLastTransfer}
-                                                block
-                                            >
-                                                Recover Last Transfer
-                                            </Button>
+                                            <div style={{ maxHeight: 220, overflowY: 'auto', width: '100%' }}>
+                                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                                    {recoverableSessions.map(session => (
+                                                        <div
+                                                            key={session.id}
+                                                            style={{
+                                                                display: 'flex',
+                                                                alignItems: 'center',
+                                                                justifyContent: 'space-between',
+                                                                gap: 12,
+                                                                padding: 10,
+                                                                border: '1px solid #fde68a',
+                                                                borderRadius: 8,
+                                                                background: '#fff'
+                                                            }}
+                                                        >
+                                                            <div style={{ minWidth: 0 }}>
+                                                                <Text strong ellipsis style={{ display: 'block' }}>{session.label}</Text>
+                                                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                                                    {session.recordCount} rows · {new Date(session.modifiedAt).toLocaleString()}
+                                                                </Text>
+                                                            </div>
+                                                            <Button
+                                                                type="primary"
+                                                                icon={<HistoryOutlined />}
+                                                                loading={recoveringSessionId === session.id}
+                                                                disabled={Boolean(recoveringSessionId && recoveringSessionId !== session.id)}
+                                                                onClick={() => handleRecoverTransfer(session.id)}
+                                                            >
+                                                                Recover
+                                                            </Button>
+                                                        </div>
+                                                    ))}
+                                                </Space>
+                                            </div>
                                         </Space>
                                     }
                                 />
@@ -469,7 +554,7 @@ export const LogViewer = ({ onBack }) => {
                                 showIcon
                                 closable
                                 style={{ marginBottom: 12 }}
-                                message={`${logData.results.length} rows recovered from ${logData.recoverySource.toLocaleLowerCase()}`}
+                                message={`${logData.results.length} rows recovered from ${logData.recoverySource}`}
                                 description={logData.recoveryWarningCount
                                     ? `${logData.recoveryWarningCount} incomplete/corrupt line was skipped; all intact rows are shown.`
                                     : 'The persisted on-disk log was read successfully.'}
@@ -611,6 +696,22 @@ export const LogViewer = ({ onBack }) => {
                                         </Popover>
                                     </Space>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, height: 32 }}>
+                                        <Tooltip title="Export recovered logs to Excel">
+                                            <Button
+                                                icon={<FileExcelOutlined style={{ color: '#16a34a' }} />}
+                                                onClick={handleExportExcel}
+                                                loading={exportLoading === 'excel'}
+                                                disabled={Boolean(exportLoading && exportLoading !== 'excel')}
+                                            />
+                                        </Tooltip>
+                                        <Tooltip title="Export recovered logs to JSON">
+                                            <Button
+                                                icon={<DownloadOutlined style={{ color: '#3b82f6' }} />}
+                                                onClick={handleExportJson}
+                                                loading={exportLoading === 'json'}
+                                                disabled={Boolean(exportLoading && exportLoading !== 'json')}
+                                            />
+                                        </Tooltip>
                                         <div style={{ display: 'flex', alignItems: 'center', height: 32, minWidth: 45, justifyContent: 'flex-end', visibility: matches.length > 0 ? 'visible' : 'hidden' }}>
                                             <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', userSelect: 'none' }}>{currentMatchIndex + 1} / {matches.length}</div>
                                         </div>
