@@ -11,6 +11,59 @@ const normalizeControlText = value => value === null || value === undefined
     ? null
     : String(value);
 
+const CONNECTIVITY_FAILURE_STATUSES = new Set([401, 403, 502, 503, 504]);
+
+const getErrorHttpStatus = error => {
+    if (Number.isFinite(error?.status)) return error.status;
+    const match = /\bHTTP\s+(\d{3})\b/i.exec(String(error?.message || ''));
+    return match ? Number(match[1]) : null;
+};
+
+const isConnectivityFailureStatus = status => CONNECTIVITY_FAILURE_STATUSES.has(status);
+
+const getHttpStatusMessage = status => {
+    const statusMessages = {
+        401: 'Oturum gecersiz veya suresi dolmus. Yeniden giris yapip transferi devam ettirin.',
+        403: 'CSP ortamina erisim engellendi. VPN/ortam baglantisini ve oturum yetkisini kontrol edip transferi devam ettirin.',
+        404: 'Relay API adresi bulunamadi. Deploy URL ve yayinlanmis Systek_SynergyCSPRelay uygulamasini kontrol edin.',
+        502: 'CSP ortamina ulasilamiyor. VPN/ortam baglantisini kontrol edip transferi devam ettirin.',
+        503: 'CSP ortami su anda yanit vermiyor. VPN/ortam baglantisini kontrol edip transferi devam ettirin.',
+        504: 'CSP ortami zaman asimina ugradi. VPN/ortam baglantisini kontrol edip transferi devam ettirin.'
+    };
+
+    return statusMessages[status] || null;
+};
+
+const getNetworkFailureMessage = error => {
+    const message = String(error?.message || '');
+    if (
+        error?.name === 'TypeError' ||
+        /failed to fetch|networkerror|load failed|internet disconnected|network request failed/i.test(message)
+    ) {
+        return 'CSP ortamina baglanti kurulamadi. VPN/ortam baglantisini kontrol edip transferi devam ettirin.';
+    }
+    return null;
+};
+
+const getTransferFailureMessage = error => {
+    return getHttpStatusMessage(getErrorHttpStatus(error)) || getNetworkFailureMessage(error) || error?.message || 'Network/Processing Error';
+};
+
+const isConnectivityFailure = error => {
+    return isConnectivityFailureStatus(getErrorHttpStatus(error)) || Boolean(getNetworkFailureMessage(error));
+};
+
+const getRelayCapabilityFailureMessage = error => {
+    if (error?.relayCapabilityMissing) {
+        return 'Yayinlanmis Systek_SynergyCSPRelay uygulamasi bu transfer ozelligini desteklemiyor. Guncel CSP Relay projesini build/deploy edip tekrar deneyin.';
+    }
+
+    const connectivityMessage = getHttpStatusMessage(getErrorHttpStatus(error)) || getNetworkFailureMessage(error);
+    if (connectivityMessage) return connectivityMessage;
+
+    return 'Relay capability kontrolu tamamlanamadi. Ortam baglantisini, oturumu ve yayinlanmis Systek_SynergyCSPRelay uygulamasini kontrol edin.';
+};
+
 async function fetchWithRetry(url, options, maxRetries = 3) {
     for (let i = 0; i <= maxRetries; i++) {
         try {
@@ -1780,6 +1833,10 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             if (!res.ok) {
                 const err = new Error(`${endpoint} failed (HTTP ${res.status} ${res.statusText})`);
                 err.rawResponse = responseBody;
+                err.status = res.status;
+                err.statusText = res.statusText;
+                err.endpoint = endpoint;
+                err.url = url;
                 throw err;
             }
 
@@ -1801,16 +1858,26 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 const capabilities = await postTransferJson('Capabilities', {}, capabilityLog);
                 const supportsUniqueGridColumns = capabilities?.uniqueGridColumns === true || capabilities?.UniqueGridColumns === true;
                 const supportsSessionFileChunks = capabilities?.sessionFileChunks === true || capabilities?.SessionFileChunks === true;
-                if (needsUniqueGridColumns && !supportsUniqueGridColumns)
-                    throw new Error('The deployed relay does not report duplicate grid row support.');
-                if (needsSessionFileChunks && !supportsSessionFileChunks)
-                    throw new Error('The deployed relay does not report RelatedGrid session file chunk support.');
+                if (needsUniqueGridColumns && !supportsUniqueGridColumns) {
+                    const capabilityError = new Error('The deployed relay does not report duplicate grid row support.');
+                    capabilityError.relayCapabilityMissing = true;
+                    throw capabilityError;
+                }
+                if (needsSessionFileChunks && !supportsSessionFileChunks) {
+                    const capabilityError = new Error('The deployed relay does not report RelatedGrid session file chunk support.');
+                    capabilityError.relayCapabilityMissing = true;
+                    throw capabilityError;
+                }
                 capabilityLog.status = 'Success';
                 capabilityLog.details = 'Required relay capabilities are active';
             } catch (error) {
                 capabilityLog.status = 'Error';
-                capabilityLog.details = 'The deployed Systek_SynergyCSPRelay project is outdated. Build and deploy the updated CSP project before running this transfer.';
-                throw new Error(capabilityLog.details);
+                capabilityLog.details = getRelayCapabilityFailureMessage(error);
+                const capabilityError = new Error(capabilityLog.details);
+                capabilityError.rawResponse = error.rawResponse;
+                capabilityError.status = error.status;
+                capabilityError.statusText = error.statusText;
+                throw capabilityError;
             }
         }
 
@@ -1842,6 +1909,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         let responseOk = false;
         let responseStatus = 0;
         let responseStatusText = '';
+        let autoPauseTransfer = false;
         const sessionDiagnostics = [];
 
         const { beginPayload, jobs: relatedGridJobs } = extractRelatedGridJobs(payload);
@@ -1975,6 +2043,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         } else {
             execLog.status = 'Error';
             execLog.details += ' - HTTP Failed';
+            msg = getHttpStatusMessage(responseStatus) || msg;
+            autoPauseTransfer = isConnectivityFailureStatus(responseStatus);
         }
 
         // Capture raw diagnostics for the final execution step
@@ -1999,7 +2069,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             payload,
             response: fullApiResponse,
             executionLog,
-            warnings
+            warnings,
+            autoPauseTransfer
         };
 
     } catch (networkError) {
@@ -2008,11 +2079,12 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         }
         return {
             status: networkError.isValidationError ? 'ValidationError' : 'Error',
-            message: networkError.message || 'Network/Processing Error',
+            message: getTransferFailureMessage(networkError),
             payload,
             response: networkError.rawResponse || null,
             executionLog,
-            warnings
+            warnings,
+            autoPauseTransfer: isConnectivityFailure(networkError)
         };
     }
 };

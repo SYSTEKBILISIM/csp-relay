@@ -110,7 +110,7 @@ const ExecutionDateValue = ({ timestamp }) => {
 
 
 export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChange }) => {
-    const { message } = App.useApp();
+    const { message, modal } = App.useApp();
     // MVC: Use Custom Hook for Logic
     const {
         loading,
@@ -123,6 +123,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         setExecutionMode,
         executionTiming,
         isComplete,
+        isStopped,
         excelData, // Exposed if needed for UI checks
         isPaused,
         selectedRowKeys,
@@ -136,6 +137,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         getLogDetailsAsync,
         retryState,
         resumeTransfer,
+        resumeTransferWithFailures,
         isRetryMode,
         getRowData,
         isStopping,
@@ -205,6 +207,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         let completedRows = 0;
 
         logs.forEach(log => {
+            if (log.status !== 'Success' && log.status !== 'Warning') return;
             const match = /^([\d.]+)ms$/.exec(String(log.duration || ''));
             if (!match) return;
             const duration = Number(match[1]);
@@ -882,6 +885,22 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         }),
     };
 
+    const handleStopTransfer = () => {
+        modal.confirm({
+            centered: true,
+            title: 'Stop transfer completely?',
+            content: !loading
+                ? 'The paused transfer will be closed completely. It cannot be resumed; use Restart from Scratch to start again.'
+                : executionMode === 'parallel'
+                    ? 'Active rows will be allowed to finish, then the transfer will stop completely. It cannot be resumed; use Restart from Scratch to start again.'
+                    : 'The active row will be allowed to finish, then the transfer will stop completely. It cannot be resumed; use Restart from Scratch to start again.',
+            okText: 'Stop Transfer',
+            okType: 'danger',
+            cancelText: 'Continue Transfer',
+            onOk: stopTransfer
+        });
+    };
+
     const onQueueRow = (record, index) => {
         const isLocked = record.status !== 'Pending';
 
@@ -924,7 +943,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             <div className="exec-header">
                 <div className="exec-header-copy">
                     <Title level={3}>
-                        {isComplete ? 'Transfer Completed' : 'Queue Details & Transfer'}
+                        {isStopped ? 'Transfer Stopped' : isComplete ? 'Transfer Completed' : 'Queue Details & Transfer'}
                     </Title>
                     <Text type="secondary">Review summary rows and configure process execution</Text>
                 </div>
@@ -1077,6 +1096,18 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                         {isRetryMode ? 'Resume Retry' : 'Resume Transfer'}
                     </Button>
                 )}
+                {isPaused && !loading && !isRetryMode && totalErrs > 0 && (
+                    <Tooltip title="Resume in queue order from the first pending or failed row; successful rows are skipped">
+                        <Button
+                            type="default"
+                            icon={<UndoOutlined />}
+                            onClick={() => { setSearchText(''); setCurrentMatchIndex(-1); resumeTransferWithFailures(); }}
+                            size="large"
+                        >
+                            Resume Pending + Failed
+                        </Button>
+                    </Tooltip>
+                )}
                 {loading && (
                     <Button type="default" icon={<PauseCircleOutlined />} onClick={pauseTransfer} disabled={isPaused || isStopping || isPausing} size="large"
                         className="pause-btn">
@@ -1084,12 +1115,12 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     </Button>
                 )}
                 {(loading || isPaused) && (
-                    <Button danger icon={<StopOutlined />} onClick={stopTransfer} size="large" disabled={isStopping || isPausing}>
+                    <Button danger icon={<StopOutlined />} onClick={handleStopTransfer} size="large" disabled={isStopping || isPausing}>
                         {isStopping ? (isRetryMode ? 'Stopping Retry...' : 'Stopping...') : (isRetryMode ? 'Stop Retry' : 'Stop Transfer')}
                     </Button>
                 )}
 
-                {isComplete && totalErrs > 0 && (
+                {isComplete && !isStopped && totalErrs > 0 && (
                     <Popover content={retryPopoverContent} title="Retry Configuration" trigger="click" placement="bottomLeft">
                         <Button type="primary" danger icon={<UndoOutlined />} size="large">Retry {totalErrs} Failed Rows</Button>
                     </Popover>
