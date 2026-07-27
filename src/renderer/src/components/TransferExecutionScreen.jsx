@@ -197,6 +197,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
 
     // --- Retry Logic ---
     const [retryOptions, setRetryOptions] = useState({ system: true, validation: true });
+    const [resumeFailedOptions, setResumeFailedOptions] = useState({ system: true, validation: true });
 
     // We compute these synchronously from logs
     const countSysErrs = logs.filter(l => l.status === 'Error').length;
@@ -225,13 +226,19 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         retryFailed(retryOptions.system, retryOptions.validation);
     };
 
-    const retryPopoverContent = (
+    const handleResumeWithFailures = () => {
+        setSearchText('');
+        setCurrentMatchIndex(-1);
+        resumeTransferWithFailures(resumeFailedOptions.system, resumeFailedOptions.validation);
+    };
+
+    const renderErrorTypeOptions = ({ options, setOptions, actionLabel, onAction, danger = false }) => (
         <div className="retry-popover-content">
-            <div className="retry-popover-title">Select error types to retry:</div>
+            <div className="retry-popover-title">Select failed row types:</div>
 
             <Checkbox
-                checked={retryOptions.system}
-                onChange={e => setRetryOptions({ ...retryOptions, system: e.target.checked })}
+                checked={options.system}
+                onChange={e => setOptions(current => ({ ...current, system: e.target.checked }))}
                 disabled={countSysErrs === 0}
             >
                 <div className="retry-popover-row">
@@ -241,8 +248,8 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             </Checkbox>
 
             <Checkbox
-                checked={retryOptions.validation}
-                onChange={e => setRetryOptions({ ...retryOptions, validation: e.target.checked })}
+                checked={options.validation}
+                onChange={e => setOptions(current => ({ ...current, validation: e.target.checked }))}
                 disabled={countValErrs === 0}
             >
                 <div className="retry-popover-row">
@@ -253,16 +260,31 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
 
             <Button
                 type="primary"
-                danger
-                onClick={handleRetry}
-                disabled={!retryOptions.system && !retryOptions.validation}
+                danger={danger}
+                onClick={onAction}
+                disabled={(!options.system || countSysErrs === 0) && (!options.validation || countValErrs === 0)}
                 className="retry-popover-btn"
                 icon={<PlayCircleOutlined />}
             >
-                Start Retry
+                {actionLabel}
             </Button>
         </div>
     );
+
+    const retryPopoverContent = renderErrorTypeOptions({
+        options: retryOptions,
+        setOptions: setRetryOptions,
+        actionLabel: 'Start Retry',
+        onAction: handleRetry,
+        danger: true
+    });
+
+    const resumeFailedPopoverContent = renderErrorTypeOptions({
+        options: resumeFailedOptions,
+        setOptions: setResumeFailedOptions,
+        actionLabel: 'Resume Selected',
+        onAction: handleResumeWithFailures
+    });
 
     // Dynamic Table Height
     useEffect(() => {
@@ -886,14 +908,33 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     };
 
     const handleStopTransfer = () => {
+        const stopDescription = !loading
+            ? 'The paused transfer will be closed and cannot be resumed from its current queue position.'
+            : executionMode === 'parallel'
+                ? 'Rows currently being processed will finish safely, then the remaining queue will be stopped.'
+                : 'The row currently being processed will finish safely, then the remaining queue will be stopped.';
+
         modal.confirm({
             centered: true,
-            title: 'Stop transfer completely?',
-            content: !loading
-                ? 'The paused transfer will be closed completely. It cannot be resumed; use Restart from Scratch to start again.'
-                : executionMode === 'parallel'
-                    ? 'Active rows will be allowed to finish, then the transfer will stop completely. It cannot be resumed; use Restart from Scratch to start again.'
-                    : 'The active row will be allowed to finish, then the transfer will stop completely. It cannot be resumed; use Restart from Scratch to start again.',
+            className: 'stop-transfer-confirm-modal',
+            icon: null,
+            width: 410,
+            content: (
+                <div className="stop-transfer-dialog">
+                    <div className="stop-transfer-dialog-header">
+                        <div className="stop-transfer-dialog-icon">
+                            <StopOutlined />
+                        </div>
+                        <div className="stop-transfer-dialog-heading">
+                            <div className="stop-transfer-dialog-title">Stop this transfer?</div>
+                        </div>
+                    </div>
+                    <p className="stop-transfer-dialog-description">{stopDescription}</p>
+                    <div className="stop-transfer-dialog-note">
+                        Run again with <strong>Restart from Scratch</strong>.
+                    </div>
+                </div>
+            ),
             okText: 'Stop Transfer',
             okType: 'danger',
             cancelText: 'Continue Transfer',
@@ -1097,16 +1138,15 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     </Button>
                 )}
                 {isPaused && !loading && !isRetryMode && totalErrs > 0 && (
-                    <Tooltip title="Resume in queue order from the first pending or failed row; successful rows are skipped">
+                    <Popover content={resumeFailedPopoverContent} title="Resume Configuration" trigger="click" placement="bottomLeft">
                         <Button
                             type="default"
                             icon={<UndoOutlined />}
-                            onClick={() => { setSearchText(''); setCurrentMatchIndex(-1); resumeTransferWithFailures(); }}
                             size="large"
                         >
                             Resume Pending + Failed
                         </Button>
-                    </Tooltip>
+                    </Popover>
                 )}
                 {loading && (
                     <Button type="default" icon={<PauseCircleOutlined />} onClick={pauseTransfer} disabled={isPaused || isStopping || isPausing} size="large"

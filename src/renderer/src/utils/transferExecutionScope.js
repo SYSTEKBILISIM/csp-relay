@@ -6,12 +6,18 @@ export const TRANSFER_EXECUTION_SCOPE = Object.freeze({
 
 export const isSpecialTransferScope = scope => scope !== TRANSFER_EXECUTION_SCOPE.PENDING
 
-export const isExecutableTransferStatus = (status, scope = TRANSFER_EXECUTION_SCOPE.PENDING) => {
+export const isExecutableTransferStatus = (
+    status,
+    scope = TRANSFER_EXECUTION_SCOPE.PENDING,
+    failedTypes = { system: true, validation: true }
+) => {
     if (scope === TRANSFER_EXECUTION_SCOPE.RETRY) {
         return status === 'Error' || status === 'ValidationError'
     }
     if (scope === TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS) {
-        return status === 'Pending' || status === 'Error' || status === 'ValidationError'
+        return status === 'Pending'
+            || (status === 'Error' && failedTypes.system)
+            || (status === 'ValidationError' && failedTypes.validation)
     }
     return status === 'Pending'
 }

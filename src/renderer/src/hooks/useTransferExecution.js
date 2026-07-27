@@ -146,6 +146,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     const lastUpdate = useRef(0);
     const wasRetryContextRef = useRef(false); // Persists retry context across pause/resume
     const executionScopeRef = useRef(TRANSFER_EXECUTION_SCOPE.PENDING);
+    const resumeFailedTypesRef = useRef({ system: true, validation: true });
     const attemptedSpecialScopeKeysRef = useRef(new Set());
     const [isRetryMode, setIsRetryMode] = useState(false); // For UI context-aware labels
 
@@ -240,23 +241,29 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         }
     };
 
-    const resumeTransferWithFailures = () => {
+    const resumeTransferWithFailures = (resumeSystem = true, resumeValidation = true) => {
         if (isPausedRef.current || isPaused) {
-            startTransfer(TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS, { resetSpecialAttempts: true });
+            startTransfer(TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS, {
+                resetSpecialAttempts: true,
+                failedTypes: {
+                    system: resumeSystem,
+                    validation: resumeValidation
+                }
+            });
         }
     };
 
     const getExecutableRows = (scope = TRANSFER_EXECUTION_SCOPE.PENDING) => logsStateRef.current.filter(log => {
         if (!selectedRowKeysRef.current.includes(log.key)) return false;
         if (isSpecialTransferScope(scope) && attemptedSpecialScopeKeysRef.current.has(log.key)) return false;
-        return isExecutableTransferStatus(log.status, scope);
+        return isExecutableTransferStatus(log.status, scope, resumeFailedTypesRef.current);
     });
 
     const getRemainingRowCount = (scope = TRANSFER_EXECUTION_SCOPE.PENDING) => logsStateRef.current.filter(log => {
         if (!selectedRowKeysRef.current.includes(log.key)) return false;
         if (log.status === 'Processing') return true;
         if (isSpecialTransferScope(scope) && attemptedSpecialScopeKeysRef.current.has(log.key)) return false;
-        return isExecutableTransferStatus(log.status, scope);
+        return isExecutableTransferStatus(log.status, scope, resumeFailedTypesRef.current);
     }).length;
 
     const finishTransfer = (stopped = false) => {
@@ -324,6 +331,12 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         const isResuming = isPausedRef.current || isPaused;
         const isRetryContext = scope === TRANSFER_EXECUTION_SCOPE.RETRY;
         const includesFailedRows = scope === TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS;
+        if (includesFailedRows && options.failedTypes) {
+            resumeFailedTypesRef.current = {
+                system: options.failedTypes.system !== false,
+                validation: options.failedTypes.validation !== false
+            };
+        }
         const scopeChanged = executionScopeRef.current !== scope;
         if (!isResuming || scopeChanged || options.resetSpecialAttempts === true) {
             attemptedSpecialScopeKeysRef.current = new Set();

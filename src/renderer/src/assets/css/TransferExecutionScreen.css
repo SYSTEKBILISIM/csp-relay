@@ -89,6 +89,86 @@
     margin-top: 4px !important;
 }
 
+.stop-transfer-confirm-modal .ant-modal-content {
+    overflow: hidden;
+    padding: 0 !important;
+}
+
+.stop-transfer-confirm-modal .ant-modal-confirm-body-wrapper {
+    padding: 22px;
+}
+
+.stop-transfer-confirm-modal .ant-modal-confirm-body {
+    display: block;
+}
+
+.stop-transfer-confirm-modal .ant-modal-confirm-paragraph {
+    max-width: none;
+}
+
+.stop-transfer-confirm-modal .ant-modal-confirm-content {
+    margin: 0 !important;
+}
+
+.stop-transfer-dialog-header {
+    display: flex;
+    align-items: center;
+    gap: 11px;
+}
+
+.stop-transfer-dialog-icon {
+    width: 36px;
+    height: 36px;
+    flex: 0 0 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #fecaca;
+    border-radius: 9px;
+    background: #fff1f2;
+    color: #ef4444;
+    font-size: 16px;
+}
+
+.stop-transfer-dialog-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.stop-transfer-dialog-title {
+    color: #0f172a;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.35;
+}
+
+.stop-transfer-dialog-description {
+    margin: 14px 0 0;
+    color: #475569;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.stop-transfer-dialog-note {
+    margin-top: 7px;
+    color: #94a3b8;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.stop-transfer-confirm-modal .ant-modal-confirm-btns {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 18px;
+}
+
+.stop-transfer-confirm-modal .ant-modal-confirm-btns .ant-btn {
+    min-width: 118px;
+    margin-inline-start: 0 !important;
+}
+
 .exec-header {
     position: relative;
     display: flex;
