@@ -35,6 +35,9 @@ export const MappingFields = ({
     // Keep the native input state from before AutoComplete replaces it on option selection.
     const inputRefs = React.useRef({});
     const templateInputSnapshots = React.useRef({});
+    const templateInputLocks = React.useRef({});
+    const keepTemplateDropdownOpen = React.useRef(false);
+    const [templateDropdownOpen, setTemplateDropdownOpen] = React.useState(false);
     const filterCache = React.useRef({ inputValue: null, scopeColumns: null, hasAnyMatch: false, searchVal: '' });
 
     const normalizedFormScopes = React.useMemo(() => {
@@ -109,6 +112,8 @@ export const MappingFields = ({
     };
 
     const rememberTemplateInput = (fieldKey, event) => {
+        if (templateInputLocks.current[fieldKey]) return;
+
         const inputEl = event?.currentTarget || inputRefs.current[fieldKey];
         if (!inputEl) return;
 
@@ -119,24 +124,50 @@ export const MappingFields = ({
         };
     };
 
+    const lockTemplateInput = (fieldKey) => {
+        const inputEl = inputRefs.current[fieldKey];
+        if (!inputEl) return;
+
+        templateInputSnapshots.current[fieldKey] = {
+            value: inputEl.value || '',
+            start: inputEl.selectionStart ?? inputEl.value?.length ?? 0,
+            end: inputEl.selectionEnd ?? inputEl.value?.length ?? 0
+        };
+        templateInputLocks.current[fieldKey] = true;
+
+        window.setTimeout(() => {
+            templateInputLocks.current[fieldKey] = false;
+        }, 0);
+    };
+
     const getTemplateReplacementRange = (text, selectionStart, selectionEnd) => {
         const safeStart = Math.max(0, Math.min(selectionStart, text.length));
         const safeEnd = Math.max(safeStart, Math.min(selectionEnd, text.length));
+        const tokenRanges = Array.from(text.matchAll(/\{\{.*?\}\}/g), match => ({
+            start: match.index,
+            end: match.index + match[0].length
+        }));
 
         if (safeStart !== safeEnd) {
+            const overlappingTokens = tokenRanges.filter(token => (
+                safeStart < token.end && safeEnd > token.start
+            ));
+
+            if (overlappingTokens.length > 0) {
+                return {
+                    start: Math.min(safeStart, overlappingTokens[0].start),
+                    end: Math.max(safeEnd, overlappingTokens[overlappingTokens.length - 1].end)
+                };
+            }
+
             return { start: safeStart, end: safeEnd };
         }
 
-        const beforeCursor = text.slice(0, safeStart);
-        const lastClosedToken = beforeCursor.lastIndexOf('}}');
-        const lastOpenToken = beforeCursor.lastIndexOf('{{');
-
-        if (lastOpenToken > lastClosedToken) {
-            const tokenEnd = text.indexOf('}}', safeStart);
-            return {
-                start: lastOpenToken,
-                end: tokenEnd === -1 ? text.length : tokenEnd + 2
-            };
+        const currentToken = tokenRanges.find(token => (
+            safeStart >= token.start && safeStart < token.end
+        ));
+        if (currentToken) {
+            return currentToken;
         }
 
         let start = safeStart;
@@ -155,6 +186,8 @@ export const MappingFields = ({
     };
 
     const handleTemplateSelect = (value, fieldKey) => {
+        keepTemplateDropdownOpen.current = true;
+
         const fieldPath = getName(fieldKey);
         const inputEl = inputRefs.current[fieldKey];
         const formValue = formInstance.getFieldValue(fieldPath);
@@ -180,6 +213,7 @@ export const MappingFields = ({
             start: nextCursor,
             end: nextCursor
         };
+        templateInputLocks.current[fieldKey] = false;
 
         window.requestAnimationFrame(() => {
             const currentInput = inputRefs.current[fieldKey];
@@ -188,6 +222,15 @@ export const MappingFields = ({
                 currentInput.setSelectionRange(nextCursor, nextCursor);
             }
         });
+    };
+
+    const handleTemplateDropdownOpenChange = (open) => {
+        if (!open && keepTemplateDropdownOpen.current) {
+            keepTemplateDropdownOpen.current = false;
+            return;
+        }
+
+        setTemplateDropdownOpen(open);
     };
 
     const templateOptionsFilter = (inputValue, option) => {
@@ -708,7 +751,14 @@ export const MappingFields = ({
                                                             style={{ width: '100%' }}
                                                             options={memoizedOptions}
                                                             onSelect={(val) => handleTemplateSelect(val, "searchKeyTemplate")}
+                                                            open={templateDropdownOpen}
+                                                            onOpenChange={handleTemplateDropdownOpenChange}
                                                             filterOption={templateOptionsFilter}
+                                                            popupRender={(menu) => (
+                                                                <div onMouseDownCapture={() => lockTemplateInput("searchKeyTemplate")}>
+                                                                    {menu}
+                                                                </div>
+                                                            )}
                                                         >
                                                             <Input 
                                                                 ref={(el) => {
@@ -718,7 +768,6 @@ export const MappingFields = ({
                                                                 }}
                                                                 onInput={(event) => rememberTemplateInput("searchKeyTemplate", event)}
                                                                 onFocus={(event) => rememberTemplateInput("searchKeyTemplate", event)}
-                                                                onSelect={(event) => rememberTemplateInput("searchKeyTemplate", event)}
                                                                 onMouseUp={(event) => rememberTemplateInput("searchKeyTemplate", event)}
                                                                 onKeyUp={(event) => rememberTemplateInput("searchKeyTemplate", event)}
                                                                 size="small" 
