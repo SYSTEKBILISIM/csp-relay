@@ -32,11 +32,9 @@ export const MappingFields = ({
         return fieldPrefix.length > 0 ? [...fieldPrefix, name] : name;
     };
 
-    // Ref to track the state of inputs BEFORE onSelect fires
-    const lastSearchValues = React.useRef({});
-    const lastTypedValues = React.useRef({});
+    // Keep the native input state from before AutoComplete replaces it on option selection.
     const inputRefs = React.useRef({});
-    const selectionRefs = React.useRef({});
+    const templateInputSnapshots = React.useRef({});
     const filterCache = React.useRef({ inputValue: null, scopeColumns: null, hasAnyMatch: false, searchVal: '' });
 
     const normalizedFormScopes = React.useMemo(() => {
@@ -110,70 +108,64 @@ export const MappingFields = ({
         return false;
     };
 
-    const handleTemplateSearch = (val, fieldKey) => {
-        const isSelectedOptionValue = (memoizedOptions || []).some(option => option.value === val);
-        if (isSelectedOptionValue) return;
-
-        lastSearchValues.current[fieldKey] = val;
-        lastTypedValues.current[fieldKey] = val;
-    };
-
-    const rememberTemplateSelection = (fieldKey) => {
-        const inputEl = inputRefs.current[fieldKey];
+    const rememberTemplateInput = (fieldKey, event) => {
+        const inputEl = event?.currentTarget || inputRefs.current[fieldKey];
         if (!inputEl) return;
 
-        selectionRefs.current[fieldKey] = {
+        templateInputSnapshots.current[fieldKey] = {
+            value: inputEl.value || '',
             start: inputEl.selectionStart ?? inputEl.value?.length ?? 0,
             end: inputEl.selectionEnd ?? inputEl.value?.length ?? 0
         };
     };
 
-    const getTemplateReplacementRange = (text, cursor) => {
-        const safeCursor = Math.max(0, Math.min(cursor, text.length));
-        const beforeCursor = text.slice(0, safeCursor);
-        const lastClosedToken = beforeCursor.lastIndexOf('}}');
-        const lastOpenToken = beforeCursor.lastIndexOf('{{');
-        const lastWhitespace = Math.max(
-            beforeCursor.lastIndexOf(' '),
-            beforeCursor.lastIndexOf('\t'),
-            beforeCursor.lastIndexOf('\n')
-        );
+    const getTemplateReplacementRange = (text, selectionStart, selectionEnd) => {
+        const safeStart = Math.max(0, Math.min(selectionStart, text.length));
+        const safeEnd = Math.max(safeStart, Math.min(selectionEnd, text.length));
 
-        if (lastOpenToken > lastClosedToken) {
-            return { start: lastOpenToken, end: safeCursor };
+        if (safeStart !== safeEnd) {
+            return { start: safeStart, end: safeEnd };
         }
 
-        return { start: Math.max(lastClosedToken + 2, lastWhitespace + 1, 0), end: safeCursor };
+        const beforeCursor = text.slice(0, safeStart);
+        const lastClosedToken = beforeCursor.lastIndexOf('}}');
+        const lastOpenToken = beforeCursor.lastIndexOf('{{');
+
+        if (lastOpenToken > lastClosedToken) {
+            const tokenEnd = text.indexOf('}}', safeStart);
+            return {
+                start: lastOpenToken,
+                end: tokenEnd === -1 ? text.length : tokenEnd + 2
+            };
+        }
+
+        let start = safeStart;
+        while (start > 0 && !/\s/.test(text[start - 1])) {
+            if (start >= 2 && text.slice(start - 2, start) === '}}') break;
+            start -= 1;
+        }
+
+        let end = safeEnd;
+        while (end < text.length && !/\s/.test(text[end])) {
+            if (text.slice(end, end + 2) === '{{') break;
+            end += 1;
+        }
+
+        return { start, end };
     };
 
     const handleTemplateSelect = (value, fieldKey) => {
         const fieldPath = getName(fieldKey);
-        const formValue = formInstance.getFieldValue(fieldPath);
-        const currentFormValue = formValue !== undefined && formValue !== null
-            ? String(formValue)
-            : (lastSearchValues.current[fieldKey] || '');
-        const typedValue = lastTypedValues.current[fieldKey];
-        const prevVal = currentFormValue === value && typedValue !== undefined
-            ? typedValue
-            : currentFormValue;
         const inputEl = inputRefs.current[fieldKey];
-        const rememberedSelection = selectionRefs.current[fieldKey] || {};
-        const liveStart = inputEl?.selectionStart;
-        const liveEnd = inputEl?.selectionEnd;
-        const useRememberedSelection = currentFormValue === value && typedValue !== undefined;
-        const start = useRememberedSelection ? rememberedSelection.start : (typeof liveStart === 'number' ? liveStart : rememberedSelection.start);
-        const end = useRememberedSelection ? rememberedSelection.end : (typeof liveEnd === 'number' ? liveEnd : rememberedSelection.end);
-
-        let range;
-        if (typeof start === 'number' && typeof end === 'number' && start !== end) {
-            range = {
-                start: Math.max(0, Math.min(start, prevVal.length)),
-                end: Math.max(0, Math.min(end, prevVal.length))
-            };
-        } else {
-            const cursor = typeof end === 'number' ? end : prevVal.length;
-            range = getTemplateReplacementRange(prevVal, cursor);
-        }
+        const formValue = formInstance.getFieldValue(fieldPath);
+        const fallbackValue = formValue !== undefined && formValue !== null ? String(formValue) : '';
+        const snapshot = templateInputSnapshots.current[fieldKey] || {
+            value: fallbackValue,
+            start: inputEl?.selectionStart ?? fallbackValue.length,
+            end: inputEl?.selectionEnd ?? fallbackValue.length
+        };
+        const prevVal = snapshot.value;
+        const range = getTemplateReplacementRange(prevVal, snapshot.start, snapshot.end);
 
         const prefix = prevVal.slice(0, range.start);
         const suffix = prevVal.slice(range.end);
@@ -183,9 +175,11 @@ export const MappingFields = ({
         const nextCursor = (prefix + (needsLeadingSpace ? ' ' : '') + value).length;
 
         formInstance.setFieldValue(fieldPath, newValue);
-        lastSearchValues.current[fieldKey] = newValue;
-        lastTypedValues.current[fieldKey] = newValue;
-        selectionRefs.current[fieldKey] = { start: nextCursor, end: nextCursor };
+        templateInputSnapshots.current[fieldKey] = {
+            value: newValue,
+            start: nextCursor,
+            end: nextCursor
+        };
 
         window.requestAnimationFrame(() => {
             const currentInput = inputRefs.current[fieldKey];
@@ -713,7 +707,6 @@ export const MappingFields = ({
                                                             className="mapping-autocomplete"
                                                             style={{ width: '100%' }}
                                                             options={memoizedOptions}
-                                                            onSearch={(val) => handleTemplateSearch(val, "searchKeyTemplate")}
                                                             onSelect={(val) => handleTemplateSelect(val, "searchKeyTemplate")}
                                                             filterOption={templateOptionsFilter}
                                                         >
@@ -723,10 +716,11 @@ export const MappingFields = ({
                                                                         inputRefs.current["searchKeyTemplate"] = el.input || el;
                                                                     }
                                                                 }}
-                                                                onFocus={() => rememberTemplateSelection("searchKeyTemplate")}
-                                                                onClick={() => rememberTemplateSelection("searchKeyTemplate")}
-                                                                onKeyUp={() => rememberTemplateSelection("searchKeyTemplate")}
-                                                                onSelect={() => rememberTemplateSelection("searchKeyTemplate")}
+                                                                onInput={(event) => rememberTemplateInput("searchKeyTemplate", event)}
+                                                                onFocus={(event) => rememberTemplateInput("searchKeyTemplate", event)}
+                                                                onSelect={(event) => rememberTemplateInput("searchKeyTemplate", event)}
+                                                                onMouseUp={(event) => rememberTemplateInput("searchKeyTemplate", event)}
+                                                                onKeyUp={(event) => rememberTemplateInput("searchKeyTemplate", event)}
                                                                 size="small" 
                                                                 placeholder="e.g. {{ID}}" 
                                                                 variant="borderless" 
