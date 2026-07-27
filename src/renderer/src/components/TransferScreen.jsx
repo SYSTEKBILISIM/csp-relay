@@ -378,7 +378,10 @@ export const TransferScreen = ({ onFinish, initialData }) => {
             width: colWidths.sort,
             align: 'center',
             render: () => (
-                <div className="stable-cell-centered">
+                <div
+                    className="stable-cell-centered mapping-row-drag-handle"
+                    title="Drag to reorder"
+                >
                     <HolderOutlined style={{ color: '#94a3b8', fontSize: 13, cursor: 'grab' }} />
                 </div>
             )
@@ -749,14 +752,30 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                                     const isFiltered = !!searchQuery;
                                     const isDraggedOver = index === draggedOverIndex;
                                     return {
-                                        draggable: !isFiltered,
+                                        draggable: false,
                                         className: isDraggedOver ? 'drop-row drag-row-active' : 'drag-row-active',
+                                        onPointerDownCapture: (e) => {
+                                            const dragReady = !isFiltered && !!e.target.closest('.mapping-row-drag-handle');
+                                            e.currentTarget.dataset.dragReady = String(dragReady);
+                                            e.currentTarget.draggable = dragReady;
+                                        },
+                                        onPointerUpCapture: (e) => {
+                                            e.currentTarget.dataset.dragReady = 'false';
+                                            e.currentTarget.draggable = false;
+                                        },
                                         onDragStart: (e) => {
+                                            if (e.currentTarget.dataset.dragReady !== 'true') {
+                                                e.preventDefault();
+                                                e.stopPropagation();
+                                                return;
+                                            }
                                             e.dataTransfer.effectAllowed = 'move';
                                             e.dataTransfer.setData('dragIndex', index);
                                             e.currentTarget.style.opacity = '0.5';
                                         },
                                         onDragEnd: (e) => {
+                                            e.currentTarget.dataset.dragReady = 'false';
+                                            e.currentTarget.draggable = false;
                                             e.currentTarget.style.opacity = '1';
                                             setDraggedOverIndex(-1);
                                         },
