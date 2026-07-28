@@ -448,7 +448,7 @@ export const MappingFields = ({
                                                 <Form.Item
                                                     name={getName("trueValues")}
                                                     label={<Text strong style={{ fontSize: 11, color: '#1e293b' }}>True Values (Comma separated)</Text>}
-                                                    rules={[{ required: true, message: 'Bu alanın doldurulması zorunludur' }]}
+                                                    rules={[{ required: true, message: 'This field is required' }]}
                                                     style={{ marginBottom: 0 }}
                                                 >
                                                     <Input size="small" placeholder="e.g. yes, true, active" className="boolean-settings-input" />
@@ -461,7 +461,7 @@ export const MappingFields = ({
                                                     <Form.Item
                                                         name={getName("falseValues")}
                                                         label={<Text strong style={{ fontSize: 11, color: '#1e293b' }}>False Values (Comma separated)</Text>}
-                                                        rules={[{ required: true, message: 'Bu alanın doldurulması zorunludur' }]}
+                                                        rules={[{ required: true, message: 'This field is required' }]}
                                                         style={{ marginBottom: 0 }}
                                                     >
                                                         <Input size="small" placeholder="e.g. no, false, inactive" className="boolean-settings-input" />

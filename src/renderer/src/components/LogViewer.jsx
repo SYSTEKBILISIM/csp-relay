@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Card, Typography, Button, Table, Progress, Statistic, Row, Col, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Upload, Empty, ConfigProvider, Divider, Popover, App } from 'antd';
+import { Card, Typography, Button, Table, Progress, Row, Col, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Upload, Empty, ConfigProvider, Divider, Popover, App } from 'antd';
 import {
     DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined,
-    InfoCircleOutlined, SearchOutlined, CopyOutlined, FileTextOutlined,
-    CloudUploadOutlined, CloudDownloadOutlined, UnorderedListOutlined,
+    InfoCircleOutlined, InfoCircleFilled, SearchOutlined, CopyOutlined, FileTextOutlined,
+    CloudDownloadOutlined, UnorderedListOutlined,
     CodeOutlined, CaretUpOutlined, CaretDownOutlined, EyeOutlined,
     InboxOutlined, ImportOutlined, ArrowLeftOutlined, DeleteOutlined, CloseOutlined,
     HistoryOutlined, FileExcelOutlined
@@ -13,6 +13,7 @@ import * as XLSX from 'xlsx';
 import { LogDetailsModal, safeJsonFormat, CopyAnimatedButton } from './log/LogDetailsModal';
 import { logDB } from '../services/IndexedDBService';
 import '../assets/css/TransferExecutionScreen.css';
+import '../assets/css/LogViewer.css';
 
 const { Title, Text, Paragraph } = Typography;
 const { Dragger } = Upload;
@@ -62,7 +63,7 @@ const HighlightText = ({ text, highlight, isFocused }) => {
     );
 };
 
-export const LogViewer = ({ onBack }) => {
+export const LogViewer = ({ onBack, onRestoreSession }) => {
     const { message } = App.useApp();
     const [logData, setLogData] = useState(null);
     const [searchText, setSearchText] = useState('');
@@ -75,16 +76,17 @@ export const LogViewer = ({ onBack }) => {
     const [recoverableSessions, setRecoverableSessions] = useState([]);
     const [recoveringSessionId, setRecoveringSessionId] = useState(null);
     const [exportLoading, setExportLoading] = useState(null);
-
     const searchInputRef = useRef(null);
     const tableContainerRef = useRef(null);
     const resultsTableRef = useRef(null);
     const [tableScrollY, setTableScrollY] = useState(400);
 
+    const visibleResults = useMemo(() => logData?.results || [], [logData]);
+
     const matches = useMemo(() => {
         if (!debouncedSearchText || !logData) return [];
         const lowSearch = debouncedSearchText.toLocaleLowerCase('tr-TR');
-        return (logData.results || [])
+        return visibleResults
             .filter(item => {
                 const rowData = item.rowData || {};
                 if (String(item.id).toLocaleLowerCase('tr-TR').includes(lowSearch) ||
@@ -94,7 +96,7 @@ export const LogViewer = ({ onBack }) => {
                 return Object.values(rowData).some(val => String(val).toLocaleLowerCase('tr-TR').includes(lowSearch));
             })
             .map(item => item.key || item.id);
-    }, [logData, debouncedSearchText]);
+    }, [visibleResults, debouncedSearchText]);
 
     const stats = useMemo(() => {
         if (!logData) return null;
@@ -233,9 +235,40 @@ export const LogViewer = ({ onBack }) => {
         }
     };
 
+    const handleRestoreTransfer = async (sessionId) => {
+        setRecoveringSessionId(sessionId);
+        try {
+            const recovered = await logDB.recover(sessionId);
+            if (!recovered?.results?.length) {
+                message.warning('No recoverable records were found in this session.');
+                return;
+            }
+            onRestoreSession?.(recovered);
+            message.success('Session restored. Opening the transfer screen...');
+        } catch (error) {
+            message.error(`The session could not be restored: ${error.message}`);
+        } finally {
+            setRecoveringSessionId(null);
+        }
+    };
+
     const clearLogs = () => {
         setLogData(null);
         setSearchText('');
+    };
+
+    const handleOpenDetails = async (record) => {
+        let detailRecord = record;
+        if (!record.details && logData?.recoverySessionId && record.hasDetails) {
+            try {
+                const details = await logDB.getRecoveredDetail(logData.recoverySessionId, record.key);
+                detailRecord = { ...record, details };
+            } catch (error) {
+                message.error(`The record details could not be opened: ${error.message}`);
+            }
+        }
+        setSelectedLog(detailRecord);
+        setModalVisible(true);
     };
 
     const handleExportExcel = async () => {
@@ -386,7 +419,7 @@ export const LogViewer = ({ onBack }) => {
             render: (_, record) => (
                 <StableCell style={{ justifyContent: 'center', width: '100%' }}>
                     <Tooltip title="View Details">
-                        <Button size="small" icon={<InfoCircleOutlined />} onClick={() => { setSelectedLog(record); setModalVisible(true); }} />
+                        <Button size="small" icon={<InfoCircleOutlined />} onClick={() => handleOpenDetails(record)} />
                     </Tooltip>
                 </StableCell>
             )
@@ -400,7 +433,7 @@ export const LogViewer = ({ onBack }) => {
         if (nextIdx < 0) nextIdx = matches.length - 1;
         setCurrentMatchIndex(nextIdx);
 
-        const visualIdx = logData.results.findIndex(item => (item.key || item.id) === matches[nextIdx]);
+        const visualIdx = visibleResults.findIndex(item => (item.key || item.id) === matches[nextIdx]);
         if (visualIdx !== -1 && resultsTableRef.current) {
             resultsTableRef.current.scrollTo({ index: visualIdx, align: 'top' });
         }
@@ -413,20 +446,32 @@ export const LogViewer = ({ onBack }) => {
                     <div style={{ display: 'flex', alignItems: 'center' }}>
                         <Button icon={<ArrowLeftOutlined />} onClick={onBack} size="large" style={{ marginRight: 16, borderRadius: '50%' }} />
                         <div>
-                            <Title level={2} style={{ margin: 0 }}>Standalone Log Viewer</Title>
+                            <Title level={2} style={{ margin: 0 }}>Log Viewer</Title>
                             <Text type="secondary">Review and analyze offline transfer logs</Text>
                         </div>
                     </div>
                     {logData && (
-                        <Tooltip>
-                            <Button
-                                danger
-                                icon={<CloseOutlined />}
-                                onClick={clearLogs}
-                                size="large"
-                                style={{ borderRadius: '50%' }}
-                            />
-                        </Tooltip>
+                        <Space>
+                            {onRestoreSession && logData.recovered && (
+                                <Button
+                                    type="primary"
+                                    icon={<HistoryOutlined />}
+                                    onClick={() => onRestoreSession(logData)}
+                                    size="large"
+                                >
+                                    Restore This Session
+                                </Button>
+                            )}
+                            <Tooltip title="Close">
+                                <Button
+                                    danger
+                                    icon={<CloseOutlined />}
+                                    onClick={clearLogs}
+                                    size="large"
+                                    style={{ borderRadius: '50%' }}
+                                />
+                            </Tooltip>
+                        </Space>
                     )}
                 </div>
 
@@ -434,57 +479,30 @@ export const LogViewer = ({ onBack }) => {
                     <motion.div
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
-                        style={{
-                            flex: 1,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            background: 'linear-gradient(135deg, #f0f9ff 0%, #ffffff 100%)',
-                            borderRadius: 20,
-                            margin: '0 0 16px 0',
-                            border: '1px solid #e0f2fe'
-                        }}
+                        className="log-viewer-load-shell"
                     >
-                        <Card
-                            style={{
-                                width: 480,
-                                borderRadius: 20,
-                                boxShadow: '0 10px 25px -5px rgba(0, 0, 0, 0.04), 0 8px 10px -6px rgba(0, 0, 0, 0.04)',
-                                border: '1px solid #fff'
-                            }}
-                            styles={{ body: { padding: '32px 24px' } }}
-                        >
-                            <div style={{ textAlign: 'center', marginBottom: 28 }}>
-                                <div style={{
-                                    width: 52,
-                                    height: 52,
-                                    background: '#eff6ff',
-                                    borderRadius: 14,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    margin: '0 auto 16px auto',
-                                    border: '1px solid #dbeafe'
-                                }}>
-                                    <CloudUploadOutlined style={{ color: '#3b82f6', fontSize: 24 }} />
-                                </div>
-                                <Title level={4} style={{ margin: '0 0 4px 0', color: '#1e293b' }}>Load Transfer Logs</Title>
-                                <Text type="secondary" style={{ fontSize: 13 }}>Recover the last session or select an exported .json log</Text>
-                            </div>
-
+                        <div className="log-viewer-load-content">
                             {recoverableSessions.length > 0 && (
                                 <Alert
-                                    type="warning"
-                                    showIcon
-                                    icon={<HistoryOutlined />}
+                                    className="log-viewer-recover-panel"
+                                    type="info"
                                     style={{ marginBottom: 20, textAlign: 'left' }}
-                                    message={`${recoverableSessions.length} recoverable transfer log${recoverableSessions.length > 1 ? 's were' : ' was'} found`}
+                                    message={
+                                        <div className="log-viewer-session-heading">
+                                            <div>
+                                                <Text strong>Recent sessions</Text>
+                                                <Text type="secondary">Automatically saved transfer logs</Text>
+                                            </div>
+                                            <span>{recoverableSessions.length} found</span>
+                                        </div>
+                                    }
                                     description={
                                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                             <div style={{ maxHeight: 220, overflowY: 'auto', width: '100%' }}>
                                                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                                     {recoverableSessions.map(session => (
                                                         <div
+                                                            className="log-viewer-session-card"
                                                             key={session.id}
                                                             style={{
                                                                 display: 'flex',
@@ -497,21 +515,37 @@ export const LogViewer = ({ onBack }) => {
                                                                 background: '#fff'
                                                             }}
                                                         >
-                                                            <div style={{ minWidth: 0 }}>
+                                                            <div className="log-viewer-session-mark">
+                                                                <HistoryOutlined />
+                                                            </div>
+                                                            <div className="log-viewer-session-copy">
                                                                 <Text strong ellipsis style={{ display: 'block' }}>{session.label}</Text>
                                                                 <Text type="secondary" style={{ fontSize: 11 }}>
                                                                     {session.recordCount} rows · {new Date(session.modifiedAt).toLocaleString()}
                                                                 </Text>
                                                             </div>
-                                                            <Button
-                                                                type="primary"
-                                                                icon={<HistoryOutlined />}
-                                                                loading={recoveringSessionId === session.id}
-                                                                disabled={Boolean(recoveringSessionId && recoveringSessionId !== session.id)}
-                                                                onClick={() => handleRecoverTransfer(session.id)}
-                                                            >
-                                                                Recover
-                                                            </Button>
+                                                            <Space>
+                                                                <Button
+                                                                    type="text"
+                                                                    icon={<EyeOutlined />}
+                                                                    loading={recoveringSessionId === session.id}
+                                                                    disabled={Boolean(recoveringSessionId && recoveringSessionId !== session.id)}
+                                                                    onClick={() => handleRecoverTransfer(session.id)}
+                                                                >
+                                                                    Review
+                                                                </Button>
+                                                                {onRestoreSession && (
+                                                                    <Button
+                                                                        type="primary"
+                                                                        icon={<HistoryOutlined />}
+                                                                        loading={recoveringSessionId === session.id}
+                                                                        disabled={Boolean(recoveringSessionId && recoveringSessionId !== session.id)}
+                                                                        onClick={() => handleRestoreTransfer(session.id)}
+                                                                    >
+                                                                        Restore
+                                                                    </Button>
+                                                                )}
+                                                            </Space>
                                                         </div>
                                                     ))}
                                                 </Space>
@@ -522,34 +556,29 @@ export const LogViewer = ({ onBack }) => {
                             )}
 
                             <Dragger
+                                className="log-viewer-file-dragger"
                                 accept=".json,.jsonl"
                                 multiple={false}
                                 beforeUpload={handleFileUpload}
                                 showUploadList={false}
-                                style={{
-                                    background: '#f8fafc',
-                                    border: '2px dashed #cbd5e1',
-                                    borderRadius: 14,
-                                    padding: '24px 0',
-                                    transition: 'all 0.2s ease'
-                                }}
                             >
                                 <p className="ant-upload-drag-icon">
                                     <InboxOutlined style={{ color: '#64748b', fontSize: 36, opacity: 0.6 }} />
                                 </p>
-                                <p className="ant-upload-text" style={{ fontSize: 14, fontWeight: 600, color: '#475569', marginTop: 12 }}>
+                                <p className="ant-upload-text">
                                     Click or drag JSON file here
                                 </p>
-                                <p className="ant-upload-hint" style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+                                <p className="ant-upload-hint">
                                     Exported JSON or persisted active-transfer-log.jsonl
                                 </p>
                             </Dragger>
-                        </Card>
+                        </div>
                     </motion.div>
                 ) : (
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                         {logData.recovered && (
                             <Alert
+                                className="log-viewer-recovery-banner"
                                 type={logData.recoveryWarningCount ? 'warning' : 'success'}
                                 showIcon
                                 closable
@@ -560,10 +589,16 @@ export const LogViewer = ({ onBack }) => {
                                     : 'The persisted on-disk log was read successfully.'}
                             />
                         )}
-                        <Row gutter={16} style={{ marginBottom: 12 }}>
+                        <Row gutter={12} className="log-viewer-stats-row">
                             <Col span={8}>
-                                <Card size="small" style={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-                                    <Statistic title="Total Rows" value={stats.total} prefix={<FileTextOutlined style={{ color: '#64748b' }} />} />
+                                <Card size="small" className="log-viewer-stat-card log-viewer-stat-total">
+                                    <div className="log-viewer-stat-content">
+                                        <span className="log-viewer-stat-icon"><FileTextOutlined /></span>
+                                        <span className="log-viewer-stat-copy">
+                                            <span className="log-viewer-stat-label">Total Rows</span>
+                                            <span className="log-viewer-stat-value">{stats.total}</span>
+                                        </span>
+                                    </div>
                                 </Card>
                             </Col>
                             <Col span={8}>
@@ -586,8 +621,14 @@ export const LogViewer = ({ onBack }) => {
                                     placement="bottomLeft"
                                     arrow
                                 >
-                                    <Card size="small" className="stats-help-cursor" style={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-                                        <Statistic title="Success" value={stats.success} styles={{ content: { color: '#16a34a' } }} prefix={<CheckCircleOutlined />} />
+                                    <Card size="small" className="stats-help-cursor log-viewer-stat-card log-viewer-stat-success">
+                                        <div className="log-viewer-stat-content">
+                                            <span className="log-viewer-stat-icon"><CheckCircleOutlined /></span>
+                                            <span className="log-viewer-stat-copy">
+                                                <span className="log-viewer-stat-label">Success</span>
+                                                <span className="log-viewer-stat-value">{stats.success}</span>
+                                            </span>
+                                        </div>
                                     </Card>
                                 </Tooltip>
                             </Col>
@@ -615,26 +656,32 @@ export const LogViewer = ({ onBack }) => {
                                     placement="bottomLeft"
                                     arrow
                                 >
-                                    <Card size="small" className="stats-help-cursor" style={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)' }}>
-                                        <Statistic title="Failed" value={stats.error} styles={{ content: { color: '#dc2626' } }} prefix={<CloseCircleOutlined />} />
+                                    <Card size="small" className="stats-help-cursor log-viewer-stat-card log-viewer-stat-failed">
+                                        <div className="log-viewer-stat-content">
+                                            <span className="log-viewer-stat-icon"><CloseCircleOutlined /></span>
+                                            <span className="log-viewer-stat-copy">
+                                                <span className="log-viewer-stat-label">Failed</span>
+                                                <span className="log-viewer-stat-value">{stats.error}</span>
+                                            </span>
+                                        </div>
                                     </Card>
                                 </Tooltip>
                             </Col>
                         </Row>
 
-                        <Card size="small" styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }} style={{ flex: 1, display: 'flex', flexDirection: 'column', borderRadius: 12, border: 'none', boxShadow: '0 4px 6px -1px rgba(0,0,0,0.05)', overflow: 'hidden' }}>
+                        <Card className="log-viewer-results-card" size="small" styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }} style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                             <div className="table-controls" style={{ padding: '12px 16px', minHeight: 64, display: 'flex', alignItems: 'center', borderBottom: '1px solid #f1f5f9', background: '#fff', flexShrink: 0 }}>
-                                <div style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <Space size="large" separator={<Divider type="vertical" style={{ borderColor: '#e2e8f0', height: 24 }} />} style={{ flex: 1, minWidth: 0, overflow: 'hidden', alignItems: 'center' }}>
-                                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, justifyContent: 'center' }}>
+                                <div className="log-viewer-table-toolbar-row">
+                                    <div className="log-viewer-metadata-bar">
+                                        <div className="log-viewer-metadata-item log-viewer-project-meta">
                                             <Text type="secondary" style={{ fontSize: 9, textTransform: 'uppercase', fontWeight: 600, lineHeight: '12px' }}>Project Name</Text>
                                             <Text strong style={{ fontSize: 12, color: '#1e293b', lineHeight: '16px' }} ellipsis>{logData.projectName || 'N/A'}</Text>
                                         </div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0, justifyContent: 'center' }}>
+                                        <div className="log-viewer-metadata-item">
                                             <Text type="secondary" style={{ fontSize: 9, textTransform: 'uppercase', fontWeight: 600, lineHeight: '12px' }}>Transfer Type</Text>
                                             <Tag color="blue" style={{ margin: 0, fontSize: 10, fontWeight: 700, lineHeight: '16px' }}>{logData.transactionType || logData.transferType || 'N/A'}</Tag>
                                         </div>
-                                        <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0, justifyContent: 'center' }}>
+                                        <div className="log-viewer-metadata-item log-viewer-export-date-meta">
                                             <Text type="secondary" style={{ fontSize: 9, textTransform: 'uppercase', fontWeight: 600, lineHeight: '12px' }}>Export Date</Text>
                                             <Text strong style={{ fontSize: 12, color: '#1e293b', lineHeight: '16px' }}>{logData.exportDate || 'N/A'}</Text>
                                         </div>
@@ -679,23 +726,13 @@ export const LogViewer = ({ onBack }) => {
                                             <Button
                                                 type="text"
                                                 size="small"
-                                                icon={<InfoCircleOutlined style={{ color: '#3b82f6' }} />}
-                                                style={{
-                                                    height: 24,
-                                                    padding: '0 10px',
-                                                    borderRadius: 6,
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: 6,
-                                                    background: '#eff6ff',
-                                                    border: '1px solid #dbeafe'
-                                                }}
-                                            >
-                                                <Text strong style={{ fontSize: 11, color: '#2563eb' }}>View Full Details</Text>
-                                            </Button>
+                                                icon={<InfoCircleFilled />}
+                                                className="log-viewer-details-button"
+                                                aria-label="View full operation details"
+                                            />
                                         </Popover>
-                                    </Space>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, height: 32 }}>
+                                    </div>
+                                    <div className="log-viewer-table-actions">
                                         <Tooltip title="Export recovered logs to Excel">
                                             <Button
                                                 icon={<FileExcelOutlined style={{ color: '#16a34a' }} />}
@@ -712,11 +749,12 @@ export const LogViewer = ({ onBack }) => {
                                                 disabled={Boolean(exportLoading && exportLoading !== 'json')}
                                             />
                                         </Tooltip>
-                                        <div style={{ display: 'flex', alignItems: 'center', height: 32, minWidth: 45, justifyContent: 'flex-end', visibility: matches.length > 0 ? 'visible' : 'hidden' }}>
-                                            <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', userSelect: 'none' }}>{currentMatchIndex + 1} / {matches.length}</div>
-                                        </div>
+                                        {matches.length > 0 && (
+                                            <div className="log-viewer-match-count">{currentMatchIndex + 1} / {matches.length}</div>
+                                        )}
                                         <Input
                                             ref={searchInputRef}
+                                            className="log-viewer-search-input"
                                             placeholder="Find in logs..."
                                             prefix={<SearchOutlined style={{ color: '#3b82f6' }} />}
                                             value={searchText}
@@ -729,17 +767,18 @@ export const LogViewer = ({ onBack }) => {
                                     </div>
                                 </div>
                             </div>
-                            <div ref={tableContainerRef} className="results-table-container scrollable-table-box" style={{ flex: 1, background: '#fff' }}>
+                            <div id="results-table-container" ref={tableContainerRef} className="results-table-container scrollable-table-box log-viewer-results-grid" style={{ flex: 1, background: '#fff' }}>
                                 <Table
                                     ref={resultsTableRef}
-                                    dataSource={logData.results}
+                                    dataSource={visibleResults}
                                     columns={columns}
                                     pagination={false}
                                     virtual
                                     size="small"
                                     scroll={{ y: tableScrollY }}
                                     rowKey={r => r.key || r.id}
-                                    style={{ fontSize: '13px' }}
+                                    tableLayout="fixed"
+                                    style={{ fontSize: '13px', width: '100%' }}
                                 />
                             </div>
                         </Card>

@@ -3,6 +3,7 @@ import { Card, Form, Input, Select, Button, Typography, message } from 'antd';
 import { UserOutlined, LockOutlined, GlobalOutlined } from '@ant-design/icons';
 import { globalStore } from '../store/GlobalStore';
 import { apiClient } from '../api/client';
+import { renewSynergySession } from '../services/SessionService';
 import '../assets/css/LoginScreen.css';
 
 const { Title, Text } = Typography;
@@ -30,7 +31,7 @@ export const LoginScreen = ({ onLogin }) => {
         } else {
             // Fallback
             setLanguages([
-                { Name: 'tr-TR', Text: 'Türkçe' },
+                { Name: 'tr-TR', Text: 'Turkish' },
                 { Name: 'en-US', Text: 'English' }
             ]);
         }
@@ -42,42 +43,14 @@ export const LoginScreen = ({ onLogin }) => {
             // Get necessary headers
             const encryptedData = globalStore.get('encryptedData');
 
-            // Construct Body with PascalCase properties to match Synergy API expectations
-            const body = {
-                Language: values.language,
-                Username: values.username,
-                Password: values.password,
-                RememberMe: false,
-                Captcha: null,
-                CaptchaId: null
-            };
-
-            console.log('Login Request:', body);
-
-            // Make API Call
-            const result = await apiClient.post('/api/web/Login/Login', body, {
-                headers: {
-                    'bimser-encrypted-data': encryptedData,
-                    'bimser-language': values.language
-                }
-            });
+            const { result, token } = await renewSynergySession(values);
 
             console.log('Login Result:', result);
 
             const isSuccess = result && (result.success || result.Success);
 
             if (isSuccess) {
-                // Determine token based on response structure
-                let token = result.token || result.Token;
-                const resultData = result.result || result.Result;
-                if (!token && resultData) {
-                    token = resultData.token || resultData.Token;
-                }
-
                 if (token) {
-                    globalStore.set('token', token);
-                    globalStore.set('language', values.language);
-
                     // Step 2: Fetch Deploy Agents
                     try {
                         const agentsResult = await apiClient.get('/api/buildManager/BuildManager/GetDeployAgents', {}, {

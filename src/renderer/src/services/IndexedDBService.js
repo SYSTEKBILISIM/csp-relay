@@ -20,9 +20,19 @@ class FileLogService {
         return this.api.get(key)
     }
 
+    async getRecoveredDetail(sessionId, key) {
+        if (!this.api) return null
+        return this.api.getRecoveredDetail(sessionId, key)
+    }
+
     async clearAll(metadata = {}) {
         if (!this.api) return
         return this.api.reset(metadata)
+    }
+
+    async saveRecoveryContext(context = {}) {
+        if (!this.api) return
+        return this.api.saveContext(context)
     }
 
     async getPath() {

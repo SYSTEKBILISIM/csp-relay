@@ -85,8 +85,8 @@ export class ErrorBoundary extends React.Component {
           <Card style={{ maxWidth: 700, width: '100%', borderRadius: 24, boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)' }}>
             <Result
               status="error"
-              title="Bir Hata Oluştu"
-              subTitle="Beklenmedik bir sorunla karşılaşıldı. Hatayı kapatıp işleminize devam edebilirsiniz."
+              title="An Error Occurred"
+              subTitle="An unexpected problem occurred. You can dismiss the error and continue."
               icon={<WarningOutlined style={{ color: '#ef4444' }} />}
               extra={
                 <Space size={16} wrap>
@@ -98,7 +98,7 @@ export class ErrorBoundary extends React.Component {
                     size="large"
                     style={{ borderRadius: 8 }}
                   >
-                    Kapat ve Devam Et
+                    Dismiss and Continue
                   </Button>
                   {hasRecoverableData && (
                     <Button
@@ -109,7 +109,7 @@ export class ErrorBoundary extends React.Component {
                       size="large"
                       style={{ borderRadius: 8, borderColor: '#10b981', color: '#10b981' }}
                     >
-                      Tanımlamaları Kurtar (Dışa Aktar)
+                      Recover Definitions (Export)
                     </Button>
                   )}
                 </Space>
@@ -118,7 +118,7 @@ export class ErrorBoundary extends React.Component {
               <div className="desc">
                 <Paragraph>
                   <Text strong style={{ fontSize: 16 }}>
-                    Hata Detayı:
+                    Error Details:
                   </Text>
                 </Paragraph>
                 <Paragraph
@@ -150,7 +150,7 @@ export class ErrorBoundary extends React.Component {
                   onClick={this.handleReload}
                   style={{ color: '#94a3b8', fontSize: 12 }}
                 >
-                  Uygulamayı yeniden başlat
+                  Restart Application
                 </Button>
               </div>
             </Result>

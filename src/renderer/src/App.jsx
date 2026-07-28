@@ -10,6 +10,7 @@ import { CustomHeader } from './components/CustomHeader';
 import { StepIndicator } from './components/StepIndicator';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LogViewer } from './components/LogViewer';
+import { globalStore } from './store/GlobalStore';
 import './assets/css/App.css';
 
 // AntD Layout Components
@@ -20,6 +21,7 @@ function App() {
     const [config, setConfig] = useState(null);
     const [deployAgents, setDeployAgents] = useState([]);
     const [isTransferring, setIsTransferring] = useState(false); // Controls navigation lock
+    const [logViewerOrigin, setLogViewerOrigin] = useState(0);
 
     const [stepData, setStepData] = useState({
         domain: null,
@@ -56,6 +58,62 @@ function App() {
         // We only want to store non-sensitive info for tooltips
         setStepData(prev => ({ ...prev, user: { username: data.username || 'User' } }));
         setCurrent(2);
+    };
+
+    const handleRestoreSession = (recovered) => {
+        const savedDefinition = recovered?.recoveryContext?.definitionData;
+        const definitionData = {
+            ...(savedDefinition || {}),
+            projectName: recovered.projectName,
+            transactionType: recovered.transactionType,
+            deployAgent: recovered.deployAgent,
+            flowName: recovered.flowName,
+            formName: recovered.formName,
+            flowDocumentName: recovered.flowDocumentName,
+            startingEventCode: recovered.startingEventCode,
+            mainIdColumn: recovered.mainIdColumn,
+            mainSheet: recovered.mainSheet,
+            fileName: recovered.fileName,
+            replayRecoveredPayload: !savedDefinition,
+            recoveredSession: {
+                id: recovered.recoverySessionId,
+                source: recovered.recoverySource,
+                results: recovered.results
+            }
+        };
+        const mainSheet = definitionData.mainSheet || 'Recovered';
+        definitionData.mainSheet = mainSheet;
+
+        let excelContent = recovered?.recoveryContext?.excelContent;
+        if (!excelContent?.[mainSheet]) {
+            const recoveredRows = [];
+            for (const [index, record] of (recovered.results || []).entries()) {
+                const numericKey = Number(record.key);
+                recoveredRows[Number.isFinite(numericKey) ? numericKey : index] = record.rowData || {};
+            }
+            excelContent = { [mainSheet]: recoveredRows };
+        }
+
+        const selectedAgent = deployAgents.find(agent =>
+            agent.uId === definitionData.deployAgent ||
+            agent.uid === definitionData.deployAgent ||
+            agent.id === definitionData.deployAgent
+        );
+        globalStore.set('deployAgent', definitionData.deployAgent);
+        globalStore.set('deployUrl', selectedAgent?.url || selectedAgent?.Url || '');
+        globalStore.set('transactionType', definitionData.transactionType);
+        globalStore.set('projectName', definitionData.projectName);
+        globalStore.set('flowName', definitionData.flowName);
+        globalStore.set('formName', definitionData.formName);
+        globalStore.set('flowDocumentName', definitionData.flowDocumentName);
+        globalStore.set('startingEventCode', definitionData.startingEventCode);
+        globalStore.set('excelContent', excelContent);
+        setStepData(prev => ({
+            ...prev,
+            project: definitionData,
+            definition: definitionData
+        }));
+        setCurrent(4);
     };
 
     const handleProjectSetup = (data) => {
@@ -123,7 +181,13 @@ function App() {
                                             transition={{ type: "spring", stiffness: 300, damping: 30 }}
                                             className="motion-container-sm"
                                         >
-                                            <DomainScreen onConnect={handleDomainConnect} onOpenViewer={() => setCurrent(5)} />
+                                            <DomainScreen
+                                                onConnect={handleDomainConnect}
+                                                onOpenViewer={() => {
+                                                    setLogViewerOrigin(0);
+                                                    setCurrent(5);
+                                                }}
+                                            />
                                         </motion.div>
                                     )}
 
@@ -155,6 +219,7 @@ function App() {
                                         >
                                             <ProjectScreen
                                                 onFinish={handleProjectSetup}
+                                                onRestoreSession={handleRestoreSession}
                                                 deployAgents={deployAgents}
                                                 initialData={stepData.project}
                                             />
@@ -208,7 +273,10 @@ function App() {
                                             transition={{ type: "spring", stiffness: 300, damping: 30 }}
                                             style={{ width: '100%', height: '100%' }}
                                         >
-                                            <LogViewer onBack={() => setCurrent(0)} />
+                                            <LogViewer
+                                                onBack={() => setCurrent(logViewerOrigin)}
+                                                onRestoreSession={logViewerOrigin === 2 ? handleRestoreSession : null}
+                                            />
                                         </motion.div>
                                     )}
                                 </AnimatePresence>

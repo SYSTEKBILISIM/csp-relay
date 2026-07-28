@@ -186,17 +186,37 @@
     padding-right: 88px;
 }
 
+.exec-title-row {
+    position: relative;
+    min-height: 32px;
+    padding-left: 38px;
+}
+
+.exec-title-row .ant-typography-title {
+    line-height: 32px !important;
+}
+
+.exec-header-subtitle {
+    margin-left: 0;
+}
+
 .exec-header .ant-typography-title {
     font-weight: 600 !important;
     color: #1e293b !important;
     margin: 0 !important;
 }
 
-.execution-mode-header {
+.exec-header-actions {
     position: absolute;
     top: 50%;
     right: 0;
     transform: translateY(calc(-50% + 14px));
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.execution-mode-header {
     flex: 0 0 auto;
     padding: 3px;
     border: 1px solid #dfe7f0;
@@ -215,6 +235,40 @@
 
 .execution-mode-header .ant-segmented-item-selected {
     color: #168dd0;
+}
+
+.legacy-replay-info-button {
+    position: absolute;
+    top: calc(50% + 7px);
+    left: 0;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    transform: translateY(-50%);
+    color: #d97706;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 9px;
+    font-size: 16px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.legacy-replay-info-button:hover {
+    color: #b45309 !important;
+    background: #fef3c7 !important;
+    border-color: #fbbf24 !important;
+}
+
+.legacy-replay-popover {
+    max-width: 286px;
+}
+
+.legacy-replay-info-text {
+    display: block;
+    width: 256px;
+    line-height: 1.5;
 }
 
 .exec-stats-wrapper {

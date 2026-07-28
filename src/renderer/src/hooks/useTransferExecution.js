@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { App } from 'antd';
 import { globalStore } from '../store/GlobalStore';
-import { processRowAndExecute } from '../services/TransferService';
+import { processRowAndExecute, replayRecoveredTransferPayload } from '../services/TransferService';
 import { logDB } from '../services/IndexedDBService';
+import { getJwtExpiry, renewSynergySessionAutomatically } from '../services/SessionService';
 import {
     TRANSFER_EXECUTION_SCOPE,
     isExecutableTransferStatus,
@@ -11,6 +12,7 @@ import {
 
 const DEFAULT_WORK_UNITS = 1;
 const PARALLEL_ROW_LIMIT = 5;
+const SESSION_RENEWAL_LEAD_MS = 30 * 1000;
 
 const formatEstimatedSeconds = seconds => {
     const totalSeconds = Math.max(0, Math.round(seconds));
@@ -94,6 +96,9 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     const [excelData, setExcelData] = useState([]);
 
     const [isPaused, setIsPaused] = useState(false);
+    const [sessionRenewalRequired, setSessionRenewalRequired] = useState(false);
+    const sessionRenewalRequiredRef = useRef(false);
+    const [sessionToken, setSessionToken] = useState(() => globalStore.get('token'));
     const [isPausing, setIsPausing] = useState(false);
     const isPausingRef = useRef(false);
     const [isStopping, setIsStopping] = useState(false);
@@ -136,6 +141,26 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setRetryState(payload);
     };
 
+    const requireSessionRenewal = (reason) => {
+        if (!sessionRenewalRequiredRef.current) {
+            sessionRenewalRequiredRef.current = true;
+            setSessionRenewalRequired(true);
+            message.warning(reason || 'The Synergy session is about to expire. Renew the session to continue the transfer.');
+        }
+    };
+
+    const clearSessionRenewalRequired = () => {
+        sessionRenewalRequiredRef.current = false;
+        setSessionRenewalRequired(false);
+    };
+
+    const notifyAutomaticSessionRenewal = () => {
+        message.success({
+            key: 'automatic-session-renewal',
+            content: 'The Synergy session was renewed automatically. The transfer is continuing.'
+        });
+    };
+
     const setExecutionMode = (mode) => {
         executionModeRef.current = mode;
         _setExecutionMode(mode);
@@ -166,6 +191,41 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         return () => clearInterval(timer);
     }, [loading]);
 
+    useEffect(() => globalStore.subscribe((key, value) => {
+        if (key === 'token') setSessionToken(value);
+    }), []);
+
+    useEffect(() => {
+        if (!loading || !sessionToken) return undefined;
+
+        const expiresAt = getJwtExpiry(sessionToken);
+        if (!Number.isFinite(expiresAt)) return undefined;
+
+        const renewBeforeExpiry = async () => {
+            try {
+                await renewSynergySessionAutomatically({ staleToken: sessionToken });
+                clearSessionRenewalRequired();
+                notifyAutomaticSessionRenewal();
+            } catch (error) {
+                requireSessionRenewal(`The Synergy session could not be renewed automatically: ${error.message}`);
+                if (isRunning.current) {
+                    setIsPausing(true);
+                    isPausingRef.current = true;
+                    isRunning.current = false;
+                }
+            }
+        };
+        const delay = expiresAt - Date.now() - SESSION_RENEWAL_LEAD_MS;
+
+        if (delay <= 0) {
+            renewBeforeExpiry();
+            return undefined;
+        }
+
+        const timer = setTimeout(renewBeforeExpiry, delay);
+        return () => clearTimeout(timer);
+    }, [loading, sessionToken]);
+
 
     // Initialize Data and Populate Queue table
     useEffect(() => {
@@ -175,6 +235,62 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         if (sheetName && storedData[sheetName]) {
             const data = storedData[sheetName];
             setExcelData(data);
+
+            const recoveredResults = definitionData?.recoveredSession?.results;
+            if (Array.isArray(recoveredResults) && recoveredResults.length > 0) {
+                const recoveredByKey = new Map(recoveredResults.map((record, index) => {
+                    const key = Number.isFinite(Number(record.key)) ? Number(record.key) : index;
+                    return [key, { ...record, key, id: record.id ?? key + 1 }];
+                }));
+                const rowKeys = data
+                    .map((row, index) => row === undefined ? null : index)
+                    .filter(key => key !== null);
+                const allKeys = [...new Set([...rowKeys, ...recoveredByKey.keys()])].sort((a, b) => a - b);
+                const recoveredLogs = allKeys.map(key => recoveredByKey.get(key) || {
+                    key,
+                    id: key + 1,
+                    status: 'Pending',
+                    message: 'Not processed before the session was interrupted.',
+                    duration: '-',
+                    timestamp: '-'
+                });
+                const executableKeys = recoveredLogs
+                    .filter(log => log.status === 'Pending' || log.status === 'Error' || log.status === 'ValidationError')
+                    .map(log => log.key);
+                const success = recoveredLogs.filter(log => log.status === 'Success' || log.status === 'Warning').length;
+                const error = recoveredLogs.filter(log => log.status === 'Error' || log.status === 'ValidationError').length;
+                const processed = recoveredLogs.filter(log => log.status !== 'Pending').length;
+
+                logsStateRef.current = recoveredLogs;
+                setLogs(recoveredLogs);
+                selectedRowKeysRef.current = executableKeys;
+                _setSelectedRowKeys(executableKeys);
+                setStats({
+                    total: recoveredLogs.length,
+                    processed,
+                    success,
+                    error,
+                    retried: 0,
+                    successBreakdown: {
+                        Success: recoveredLogs.filter(log => log.status === 'Success').length,
+                        Warning: recoveredLogs.filter(log => log.status === 'Warning').length
+                    },
+                    errorBreakdown: {
+                        ValidationError: recoveredLogs.filter(log => log.status === 'ValidationError').length,
+                        Error: recoveredLogs.filter(log => log.status === 'Error').length
+                    }
+                });
+                setProgress(recoveredLogs.length ? Math.round((processed / recoveredLogs.length) * 100) : 0);
+                setEstimatedTime(null);
+                setEstimatedFinishAt(null);
+                setIsComplete(false);
+                setIsStopped(false);
+                setIsPaused(true);
+                isPausedRef.current = true;
+                executionScopeRef.current = TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS;
+                logSessionInitializedRef.current = false;
+                return;
+            }
             
             // Transform directly to Pending logs immediately for the summary view
             const initialLogs = data.map((row, index) => {
@@ -328,7 +444,20 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     };
 
     const startTransfer = async (scope = TRANSFER_EXECUTION_SCOPE.PENDING, options = {}) => {
-        const isResuming = isPausedRef.current || isPaused;
+        const currentToken = globalStore.get('token');
+        const tokenExpiry = getJwtExpiry(currentToken);
+        if (Number.isFinite(tokenExpiry) && tokenExpiry <= Date.now() + SESSION_RENEWAL_LEAD_MS) {
+            try {
+                await renewSynergySessionAutomatically({ staleToken: currentToken });
+                clearSessionRenewalRequired();
+                notifyAutomaticSessionRenewal();
+            } catch (error) {
+                requireSessionRenewal(`The Synergy session could not be renewed automatically: ${error.message}`);
+                return;
+            }
+        }
+
+        const isResuming = (isPausedRef.current || isPaused) && logSessionInitializedRef.current;
         const isRetryContext = scope === TRANSFER_EXECUTION_SCOPE.RETRY;
         const includesFailedRows = scope === TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS;
         if (includesFailedRows && options.failedTypes) {
@@ -377,6 +506,19 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                         transferStartedAt: new Date(startedAt).toLocaleString()
                     });
                     logSessionInitializedRef.current = true;
+                    try {
+                        await logDB.saveRecoveryContext({
+                            mainUrl: globalStore.get('mainUrl'),
+                            definitionData: {
+                                ...definitionData,
+                                recoveredSession: undefined
+                            },
+                            excelContent: allSheetsData.current,
+                            selectedRowKeys: selectedRowKeysRef.current
+                        });
+                    } catch (contextError) {
+                        message.warning(`The recovery snapshot could not be saved; the transfer will continue: ${contextError.message}`);
+                    }
                 } catch (error) {
                     message.error(`Transfer log could not be initialized: ${error.message}`);
                     return;
@@ -441,11 +583,11 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         let autoPauseReason = null;
         const requestAutoPauseForConnectivity = reason => {
             if (autoPauseReason) return;
-            autoPauseReason = reason || 'CSP ortam baglantisi koptu.';
+            autoPauseReason = reason || 'The connection to the CSP environment was interrupted.';
             setIsPausing(true);
             isPausingRef.current = true;
             isRunning.current = false;
-            message.warning('CSP ortam baglantisi koptu. Transfer otomatik olarak duraklatiliyor; baglantiyi duzeltip Resume Pending + Failed ile devam edin.');
+            message.warning('The CSP connection was interrupted. The transfer is being paused automatically; restore the connection and use Resume Pending + Failed.');
         };
 
         const updateEstimatedTimeFromWork = () => {
@@ -492,7 +634,41 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             let detailObj;
 
             try {
-                const result = await processRowAndExecute(rowData, definitionData, globalStore, apiCache.current, allSheetsData.current);
+                const executeCurrentRow = async () => {
+                    if (definitionData?.replayRecoveredPayload) {
+                        const recoveredDetails = currentLog.details || (
+                            definitionData.recoveredSession?.id
+                                ? await logDB.getRecoveredDetail(
+                                    definitionData.recoveredSession.id,
+                                    currentLog.key
+                                )
+                                : null
+                        );
+                        return replayRecoveredTransferPayload(
+                            recoveredDetails?.payload,
+                            definitionData,
+                            globalStore
+                        );
+                    }
+                    return processRowAndExecute(rowData, definitionData, globalStore, apiCache.current, allSheetsData.current);
+                };
+                const attemptedToken = globalStore.get('token');
+                let result = await executeCurrentRow();
+                if (result.requiresAuthentication === true) {
+                    try {
+                        await renewSynergySessionAutomatically({ staleToken: attemptedToken });
+                        clearSessionRenewalRequired();
+                        notifyAutomaticSessionRenewal();
+                        result = await executeCurrentRow();
+                    } catch (renewalError) {
+                        result = {
+                            ...result,
+                            message: `The Synergy session could not be renewed automatically: ${renewalError.message}`,
+                            autoPauseTransfer: true,
+                            requiresAuthentication: true
+                        };
+                    }
+                }
                 const duration = Date.now() - iterStart;
                 activeLog.workUnits = getExecutionWorkUnits(result.executionLog);
 
@@ -517,6 +693,9 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                     estimationRef.current.durationAccumulator += duration;
                     estimationRef.current.workUnitsAccumulator += activeLog.workUnits;
                     estimationRef.current.processedCount += 1;
+                }
+                if (result.requiresAuthentication === true) {
+                    requireSessionRenewal(result.message);
                 }
                 if (result.autoPauseTransfer === true) {
                     requestAutoPauseForConnectivity(result.message);
@@ -753,6 +932,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         retryState,
         isRetryMode,
         isStopping,
-        isPausing
+        isPausing,
+        sessionRenewalRequired,
+        clearSessionRenewalRequired
     };
 };

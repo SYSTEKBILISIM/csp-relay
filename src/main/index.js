@@ -1,18 +1,34 @@
-import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker, dialog, crashReporter } from 'electron'
 import { dirname, join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
+import { appendFile, mkdir } from 'fs/promises'
 
 // Disable background throttling to ensure high performance during transfers
 // even when the window is minimized, hidden, or the screen is locked.
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+crashReporter.start({ uploadToServer: false, compress: false })
 import { readFileSync } from 'fs'
 import { basename, extname } from 'path'
 import mime from 'mime-types'; // Added dynamic MIME type lookup
 import { TransferLogStore } from './transferLogStore'
 
 import icon from '../../resources/icon.png?asset'
+
+const writeRuntimeEvent = async (eventName, details = {}) => {
+    try {
+        const logDirectory = join(app.getPath('userData'), 'logs')
+        await mkdir(logDirectory, { recursive: true })
+        await appendFile(join(logDirectory, 'electron-runtime-events.jsonl'), `${JSON.stringify({
+            timestamp: new Date().toISOString(),
+            event: eventName,
+            ...details
+        })}\n`, 'utf8')
+    } catch (error) {
+        console.error('[Main] Runtime event could not be logged:', error)
+    }
+}
 
 function createWindow() {
     // Create the browser window.
@@ -47,6 +63,43 @@ function createWindow() {
         return { action: 'deny' }
     })
 
+    mainWindow.webContents.on('render-process-gone', (_event, details) => {
+        writeRuntimeEvent('render-process-gone', {
+            reason: details.reason,
+            exitCode: details.exitCode,
+            url: mainWindow.webContents.getURL()
+        })
+        dialog.showMessageBox(mainWindow, {
+            type: 'error',
+            title: 'Synergy CSP Relay',
+            message: 'Uygulama arayuzu beklenmedik sekilde durdu.',
+            detail: 'Transfer logs were saved to disk. Reopen the application and check the latest session under Recoverable Logs.',
+            buttons: ['Tamam']
+        }).catch(() => undefined)
+    })
+
+    mainWindow.webContents.on('unresponsive', () => {
+        writeRuntimeEvent('renderer-unresponsive', {
+            url: mainWindow.webContents.getURL()
+        })
+    })
+
+    mainWindow.webContents.on('responsive', () => {
+        writeRuntimeEvent('renderer-responsive', {
+            url: mainWindow.webContents.getURL()
+        })
+    })
+
+    mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+        if (errorCode === -3) return
+        writeRuntimeEvent('did-fail-load', {
+            errorCode,
+            errorDescription,
+            validatedURL,
+            isMainFrame
+        })
+    })
+
     // HMR for renderer base on electron-vite cli.
     // Load the remote URL for development or the local html file for production.
     if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
@@ -64,6 +117,12 @@ const transferLogStore = new TransferLogStore(is.dev ? app.getAppPath() : dirnam
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
+    writeRuntimeEvent('app-ready', {
+        appVersion: app.getVersion(),
+        electronVersion: process.versions.electron,
+        chromeVersion: process.versions.chrome
+    })
+
     // Prevent the OS from suspending the app or entering deep sleep
     powerSaveBlocker.start('prevent-app-suspension');
 
@@ -80,9 +139,17 @@ app.whenReady().then(() => {
         await transferLogReady
         return transferLogStore.append(key, data)
     })
+    ipcMain.handle('transfer-log:save-context', async (_event, context = {}) => {
+        await transferLogReady
+        return transferLogStore.saveContext(context)
+    })
     ipcMain.handle('transfer-log:get', async (_event, key) => {
         await transferLogReady
         return transferLogStore.get(key)
+    })
+    ipcMain.handle('transfer-log:get-recovered-detail', async (_event, { sessionId, key }) => {
+        await transferLogReady
+        return transferLogStore.getRecoveredDetail(sessionId, key)
     })
     ipcMain.handle('transfer-log:path', async () => {
         await transferLogReady
@@ -188,4 +255,14 @@ app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit()
     }
+})
+
+app.on('child-process-gone', (_event, details) => {
+    writeRuntimeEvent('child-process-gone', {
+        type: details.type,
+        reason: details.reason,
+        exitCode: details.exitCode,
+        serviceName: details.serviceName,
+        name: details.name
+    })
 })

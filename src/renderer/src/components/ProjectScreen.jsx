@@ -1,15 +1,17 @@
 import React, { useState } from 'react';
-import { Card, Form, Input, Select, Button, Typography, Row, Col, Upload, Tooltip, App } from 'antd';
-import { ProjectOutlined, PartitionOutlined, BuildOutlined, FileTextOutlined, FileExcelOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import { Card, Form, Input, Select, Button, Typography, Row, Col, Upload, Tooltip, App, Modal, Empty, Spin, Tag } from 'antd';
+import { ProjectOutlined, PartitionOutlined, BuildOutlined, FileTextOutlined, FileExcelOutlined, InfoCircleOutlined, HistoryOutlined, CheckCircleFilled, InboxOutlined } from '@ant-design/icons';
 import { globalStore } from '../store/GlobalStore';
 import { parseExcelFile } from '../services/ExcelService';
 import { apiClient } from '../api/client';
+import { logDB } from '../services/IndexedDBService';
 
 import '../assets/css/ProjectScreen.css';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
 const { Dragger } = Upload;
+const LOCAL_RECOVERY_SESSION_ID = '__local_recovery_file__';
 
 const getLocalizedText = (textObj) => {
     if (!textObj) return '';
@@ -25,7 +27,7 @@ const turkishLower = (str) => {
     return str.toLocaleLowerCase('tr-TR');
 };
 
-export const ProjectScreen = ({ onFinish, deployAgents = [], initialData }) => {
+export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], initialData }) => {
     const { message } = App.useApp();
     const [form] = Form.useForm();
 
@@ -50,6 +52,115 @@ export const ProjectScreen = ({ onFinish, deployAgents = [], initialData }) => {
     const [projectTree, setProjectTree] = useState(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [docsLoading, setDocsLoading] = useState(false);
+    const [recoveryModalOpen, setRecoveryModalOpen] = useState(false);
+    const [recoverableSessions, setRecoverableSessions] = useState([]);
+    const [recoverySessionsLoading, setRecoverySessionsLoading] = useState(false);
+    const [recoveringSessionId, setRecoveringSessionId] = useState(null);
+    const [selectedRecoverySessionId, setSelectedRecoverySessionId] = useState(null);
+    const [uploadedRecoverySession, setUploadedRecoverySession] = useState(null);
+
+    const openRecoverySessions = async () => {
+        setRecoveryModalOpen(true);
+        setRecoverySessionsLoading(true);
+        setSelectedRecoverySessionId(null);
+        setUploadedRecoverySession(null);
+        try {
+            const sessions = await logDB.listRecoverable();
+            setRecoverableSessions(sessions);
+            setSelectedRecoverySessionId(sessions[0]?.id || null);
+        } catch (error) {
+            setRecoverableSessions([]);
+            message.error(`Recent sessions could not be loaded: ${error.message}`);
+        } finally {
+            setRecoverySessionsLoading(false);
+        }
+    };
+
+    const restoreRecoverySession = async (sessionId) => {
+        setRecoveringSessionId(sessionId);
+        try {
+            const recovered = sessionId === LOCAL_RECOVERY_SESSION_ID
+                ? uploadedRecoverySession
+                : await logDB.recover(sessionId);
+            if (!recovered?.results?.length) {
+                message.warning('No recoverable records were found in this session.');
+                return;
+            }
+
+            setRecoveryModalOpen(false);
+            onRestoreSession?.(recovered);
+            message.success('Session restored. Opening the transfer screen...');
+        } catch (error) {
+            message.error(`The session could not be restored: ${error.message}`);
+        } finally {
+            setRecoveringSessionId(null);
+        }
+    };
+
+    const handleRecoveryFileUpload = (file) => {
+        const reader = new FileReader();
+        reader.onload = event => {
+            const fileText = event.target.result;
+            try {
+                let recovered;
+                try {
+                    const json = JSON.parse(fileText);
+                    if (!Array.isArray(json.results) || json.results.length === 0) {
+                        throw new Error("The selected JSON file does not contain a non-empty 'results' array.");
+                    }
+                    recovered = {
+                        ...json,
+                        recovered: true,
+                        recoverySource: file.name,
+                        sourceFile: file.name
+                    };
+                } catch (jsonError) {
+                    const latestRecords = new Map();
+                    let metadata = {};
+                    let invalidLineCount = 0;
+
+                    for (const line of fileText.split(/\r?\n/)) {
+                        if (!line.trim()) continue;
+                        try {
+                            const record = JSON.parse(line);
+                            if (record.recordType === 'transfer-metadata' && record.metadata && typeof record.metadata === 'object') {
+                                metadata = record.metadata;
+                            } else if (record.key !== undefined && record.key !== null) {
+                                latestRecords.set(String(record.key), record);
+                            } else {
+                                invalidLineCount += 1;
+                            }
+                        } catch {
+                            invalidLineCount += 1;
+                        }
+                    }
+
+                    if (latestRecords.size === 0) throw jsonError;
+                    recovered = {
+                        ...metadata,
+                        recovered: true,
+                        recoverySource: file.name,
+                        sourceFile: file.name,
+                        recoveryWarningCount: invalidLineCount,
+                        results: [...latestRecords.values()]
+                    };
+                }
+
+                setUploadedRecoverySession(recovered);
+                setSelectedRecoverySessionId(LOCAL_RECOVERY_SESSION_ID);
+                const warning = recovered.recoveryWarningCount
+                    ? ` ${recovered.recoveryWarningCount} incomplete line(s) were skipped.`
+                    : '';
+                message.success(`${file.name} loaded with ${recovered.results.length} rows.${warning}`);
+            } catch (error) {
+                setUploadedRecoverySession(null);
+                message.error(`The log file could not be loaded: ${error.message}`);
+            }
+        };
+        reader.onerror = () => message.error('The selected log file could not be read.');
+        reader.readAsText(file);
+        return false;
+    };
 
     const fetchProjectDetails = async (projectSecretKey) => {
         const mainUrl = globalStore.get('mainUrl');
@@ -795,7 +906,142 @@ export const ProjectScreen = ({ onFinish, deployAgents = [], initialData }) => {
                         Create Environment
                     </Button>
                 </Form.Item>
+
+                <div className="project-recover-session-action">
+                    <Button
+                        type="text"
+                        icon={<HistoryOutlined />}
+                        onClick={openRecoverySessions}
+                        className="project-recover-session-btn"
+                        size="small"
+                    >
+                        Recent sessions
+                    </Button>
+                </div>
             </Form>
+
+            <Modal
+                open={recoveryModalOpen}
+                onCancel={() => setRecoveryModalOpen(false)}
+                footer={[
+                    <Button
+                        key="cancel"
+                        onClick={() => setRecoveryModalOpen(false)}
+                        disabled={Boolean(recoveringSessionId)}
+                    >
+                        Cancel
+                    </Button>,
+                    <Button
+                        key="restore"
+                        type="primary"
+                        icon={<HistoryOutlined />}
+                        loading={Boolean(recoveringSessionId)}
+                        disabled={!selectedRecoverySessionId}
+                        onClick={() => restoreRecoverySession(selectedRecoverySessionId)}
+                    >
+                        Restore selected session
+                    </Button>
+                ]}
+                width={560}
+                centered
+                destroyOnHidden
+                className="project-recovery-modal"
+            >
+                <div className="project-recovery-header">
+                    <div className="project-recovery-header-icon">
+                        <HistoryOutlined />
+                    </div>
+                    <div>
+                        <Title level={4} className="project-recovery-title">
+                            Recover a transfer session
+                        </Title>
+                        <Text type="secondary" className="project-recovery-description">
+                            Continue a previous transfer from its saved state.
+                        </Text>
+                    </div>
+                </div>
+
+                <Spin spinning={recoverySessionsLoading}>
+                    {!recoverySessionsLoading && recoverableSessions.length > 0 && (
+                        <div className="project-recovery-summary">
+                            <Text type="secondary">
+                                {recoverableSessions.length} recoverable session{recoverableSessions.length === 1 ? '' : 's'}
+                            </Text>
+                            <Text type="secondary">Select one to continue</Text>
+                        </div>
+                    )}
+                    <div className="project-recovery-list">
+                        {!recoverySessionsLoading && recoverableSessions.length === 0 && !uploadedRecoverySession ? (
+                            <Empty
+                                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                description="No recoverable sessions were found."
+                            />
+                        ) : (
+                            recoverableSessions.map(session => (
+                                <button
+                                    type="button"
+                                    className={`project-recovery-item${selectedRecoverySessionId === session.id ? ' project-recovery-item-selected' : ''}`}
+                                    key={session.id}
+                                    onClick={() => setSelectedRecoverySessionId(session.id)}
+                                    disabled={Boolean(recoveringSessionId)}
+                                >
+                                    <div className="project-recovery-item-info">
+                                        <div className="project-recovery-item-heading">
+                                            <Text strong ellipsis className="project-recovery-item-title">
+                                                {session.label}
+                                            </Text>
+                                            {session.hasRecoveryContext && (
+                                                <Tag color="blue" bordered={false}>Saved state</Tag>
+                                            )}
+                                        </div>
+                                        <Text type="secondary" className="project-recovery-item-meta">
+                                            {session.recordCount} rows · {new Date(session.modifiedAt).toLocaleString()}
+                                        </Text>
+                                    </div>
+                                    <CheckCircleFilled className="project-recovery-selection-icon" />
+                                </button>
+                            ))
+                        )}
+                        {uploadedRecoverySession && (
+                            <button
+                                type="button"
+                                className={`project-recovery-item project-recovery-local-item${selectedRecoverySessionId === LOCAL_RECOVERY_SESSION_ID ? ' project-recovery-item-selected' : ''}`}
+                                onClick={() => setSelectedRecoverySessionId(LOCAL_RECOVERY_SESSION_ID)}
+                                disabled={Boolean(recoveringSessionId)}
+                            >
+                                <div className="project-recovery-item-info">
+                                    <div className="project-recovery-item-heading">
+                                        <Text strong ellipsis className="project-recovery-item-title">
+                                            {uploadedRecoverySession.sourceFile}
+                                        </Text>
+                                        <Tag color="cyan" bordered={false}>Local file</Tag>
+                                    </div>
+                                    <Text type="secondary" className="project-recovery-item-meta">
+                                        {uploadedRecoverySession.results.length} rows ready to restore
+                                    </Text>
+                                </div>
+                                <CheckCircleFilled className="project-recovery-selection-icon" />
+                            </button>
+                        )}
+                    </div>
+                </Spin>
+
+                <div className="project-recovery-upload-section">
+                    <Text className="project-recovery-upload-label">Or load a log file</Text>
+                    <Dragger
+                        accept=".json,.jsonl,application/json"
+                        multiple={false}
+                        beforeUpload={handleRecoveryFileUpload}
+                        showUploadList={false}
+                        className="project-recovery-dragger"
+                    >
+                        <InboxOutlined className="project-recovery-upload-icon" />
+                        <span className="project-recovery-upload-text">
+                            Drop a JSON or JSONL log here, or click to browse
+                        </span>
+                    </Dragger>
+                </div>
+            </Modal>
         </Card>
     );
 };

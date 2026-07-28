@@ -1,6 +1,15 @@
 import _ from 'lodash';
 import { resolveTokens, normalizeString, resolvePrimitiveValue, calculateSimilarity, getRowValue } from '../utils/transferUtils';
 import { constructPayload } from './PayloadFactory';
+import {
+    getErrorHttpStatus,
+    getHttpStatusMessage,
+    getNetworkFailureMessage,
+    getTransferFailureMessage,
+    isConnectivityFailure,
+    isConnectivityFailureStatus,
+    isExpiredSynergySessionFailure
+} from '../../../shared/transferFailureClassifier';
 
 const RELAY_CSP_APP_NAME = 'Systek_SynergyCSPRelay';
 const DEFAULT_API_PAGE_SIZE = 200;
@@ -11,48 +20,6 @@ const normalizeControlText = value => value === null || value === undefined
     ? null
     : String(value);
 
-const CONNECTIVITY_FAILURE_STATUSES = new Set([401, 403, 502, 503, 504]);
-
-const getErrorHttpStatus = error => {
-    if (Number.isFinite(error?.status)) return error.status;
-    const match = /\bHTTP\s+(\d{3})\b/i.exec(String(error?.message || ''));
-    return match ? Number(match[1]) : null;
-};
-
-const isConnectivityFailureStatus = status => CONNECTIVITY_FAILURE_STATUSES.has(status);
-
-const getHttpStatusMessage = status => {
-    const statusMessages = {
-        401: 'Oturum gecersiz veya suresi dolmus. Yeniden giris yapip transferi devam ettirin.',
-        403: 'CSP ortamina erisim engellendi. VPN/ortam baglantisini ve oturum yetkisini kontrol edip transferi devam ettirin.',
-        404: 'Relay API adresi bulunamadi. Deploy URL ve yayinlanmis Systek_SynergyCSPRelay uygulamasini kontrol edin.',
-        502: 'CSP ortamina ulasilamiyor. VPN/ortam baglantisini kontrol edip transferi devam ettirin.',
-        503: 'CSP ortami su anda yanit vermiyor. VPN/ortam baglantisini kontrol edip transferi devam ettirin.',
-        504: 'CSP ortami zaman asimina ugradi. VPN/ortam baglantisini kontrol edip transferi devam ettirin.'
-    };
-
-    return statusMessages[status] || null;
-};
-
-const getNetworkFailureMessage = error => {
-    const message = String(error?.message || '');
-    if (
-        error?.name === 'TypeError' ||
-        /failed to fetch|networkerror|load failed|internet disconnected|network request failed/i.test(message)
-    ) {
-        return 'CSP ortamina baglanti kurulamadi. VPN/ortam baglantisini kontrol edip transferi devam ettirin.';
-    }
-    return null;
-};
-
-const getTransferFailureMessage = error => {
-    return getHttpStatusMessage(getErrorHttpStatus(error)) || getNetworkFailureMessage(error) || error?.message || 'Network/Processing Error';
-};
-
-const isConnectivityFailure = error => {
-    return isConnectivityFailureStatus(getErrorHttpStatus(error)) || Boolean(getNetworkFailureMessage(error));
-};
-
 const getRelayCapabilityFailureMessage = error => {
     if (error?.relayCapabilityMissing) {
         return 'Yayinlanmis Systek_SynergyCSPRelay uygulamasi bu transfer ozelligini desteklemiyor. Guncel CSP Relay projesini build/deploy edip tekrar deneyin.';
@@ -61,7 +28,7 @@ const getRelayCapabilityFailureMessage = error => {
     const connectivityMessage = getHttpStatusMessage(getErrorHttpStatus(error)) || getNetworkFailureMessage(error);
     if (connectivityMessage) return connectivityMessage;
 
-    return 'Relay capability kontrolu tamamlanamadi. Ortam baglantisini, oturumu ve yayinlanmis Systek_SynergyCSPRelay uygulamasini kontrol edin.';
+    return 'The relay capability check could not be completed. Check the environment connection, session, and deployed Systek_SynergyCSPRelay application.';
 };
 
 async function fetchWithRetry(url, options, maxRetries = 3) {
@@ -95,6 +62,91 @@ function getApiPageSize(parsedBody) {
     const configuredTake = Number(parsedBody?.loadOptions?.pagination?.take);
     return Number.isFinite(configuredTake) && configuredTake > 0 ? configuredTake : DEFAULT_API_PAGE_SIZE;
 }
+
+export const replayRecoveredTransferPayload = async (payload, definitionData, store) => {
+    const executionLog = [{
+        key: `recovered_${Date.now()}_${Math.random()}`,
+        step: 'Replay Recovered Payload',
+        details: 'Sending the payload preserved in the interrupted session',
+        status: 'Pending'
+    }];
+    try {
+        if (!payload || typeof payload !== 'object') {
+            throw new Error('No replayable payload was found in the recovered record.');
+        }
+        const deployUrl = store.get('deployUrl');
+        if (!deployUrl) throw new Error('No deploy URL was found for the selected deploy agent.');
+
+        const transactionType = definitionData?.transactionType || store.get('transactionType') || 'CreateFlow';
+        const endpoint = transactionType === 'CreateForm' || transactionType === 'EditForm'
+            ? transactionType
+            : 'CreateFlow';
+        const headers = {
+            'Content-Type': 'application/json',
+            'bimser-language': store.get('language') || 'tr-TR'
+        };
+        const token = store.get('token');
+        const encryptedData = store.get('encryptedData');
+        if (token) headers.Authorization = `Bearer ${token}`;
+        if (encryptedData) headers['bimser-encrypted-data'] = encryptedData;
+
+        const url = `${deployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer/${endpoint}`;
+        const response = await fetchWithRetry(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload)
+        });
+        const responseBody = response.ok ? await response.json() : await response.text();
+        executionLog[0].raw = {
+            request: { url, method: 'POST', headers, body: payload },
+            response: responseBody
+        };
+        if (!response.ok) {
+            const error = new Error(`${endpoint} failed (HTTP ${response.status} ${response.statusText})`);
+            error.status = response.status;
+            error.statusText = response.statusText;
+            error.rawResponse = responseBody;
+            throw error;
+        }
+
+        const saveResponse = responseBody?.saveResponse || responseBody;
+        const validationErrors = [
+            ...(saveResponse?.validationErrors || []),
+            ...(saveResponse?.result?.validationErrors || []),
+            ...((saveResponse?.forms || []).flatMap(form => form?.formSaveResponse?.result?.validationErrors || []))
+        ].map(error => error?.message).filter(Boolean);
+        const isValidationError = saveResponse?.actionResult === false || validationErrors.length > 0;
+        executionLog[0].status = isValidationError ? 'Error' : 'Success';
+
+        return {
+            status: isValidationError ? 'ValidationError' : 'Success',
+            message: isValidationError
+                ? `* ${[...new Set(validationErrors)].join('\n* ') || 'Validation Failed'}`
+                : transactionType === 'CreateForm'
+                    ? 'Form Created'
+                    : transactionType === 'EditForm'
+                        ? 'Form Updated'
+                        : 'Flow Created',
+            payload,
+            response: responseBody,
+            executionLog,
+            warnings: []
+        };
+    } catch (error) {
+        executionLog[0].status = 'Error';
+        executionLog[0].details = getTransferFailureMessage(error);
+        return {
+            status: 'Error',
+            message: getTransferFailureMessage(error),
+            payload,
+            response: error.rawResponse || null,
+            executionLog,
+            warnings: [],
+            autoPauseTransfer: isConnectivityFailure(error),
+            requiresAuthentication: isExpiredSynergySessionFailure(error)
+        };
+    }
+};
 
 function resolveApiParameterValue(value, rowData, objectContext) {
     const rawVal = resolveTokens(value, rowData, objectContext);
@@ -2084,7 +2136,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             response: networkError.rawResponse || null,
             executionLog,
             warnings,
-            autoPauseTransfer: isConnectivityFailure(networkError)
+            autoPauseTransfer: isConnectivityFailure(networkError),
+            requiresAuthentication: isExpiredSynergySessionFailure(networkError)
         };
     }
 };

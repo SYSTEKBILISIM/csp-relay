@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Card, Typography, Button, Table, Progress, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Popover, Checkbox, Select, App } from 'antd';
+import { Card, Typography, Button, Table, Progress, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Popover, Checkbox, Select, App, Form } from 'antd';
 import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, ExportOutlined, OrderedListOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import Editor from '@monaco-editor/react';
@@ -8,6 +8,8 @@ import { LogDetailsModal, safeJsonFormat, CopyAnimatedButton } from './log/LogDe
 import { getRowValue } from '../utils/transferUtils';
 import { ResizableTitle } from './ResizableTitle';
 import { logDB } from '../services/IndexedDBService';
+import { renewSynergySession } from '../services/SessionService';
+import { globalStore } from '../store/GlobalStore';
 import '../assets/css/TransferExecutionScreen.css';
 
 // Robust Turkish-aware lowercasing with normalization
@@ -141,7 +143,9 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         isRetryMode,
         getRowData,
         isStopping,
-        isPausing
+        isPausing,
+        sessionRenewalRequired,
+        clearSessionRenewalRequired
     } = useTransferExecution(definitionData, onStatusChange);
 
     // View State (Modal & Table Height)
@@ -150,6 +154,8 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const [selectedLog, setSelectedLog] = useState(null);
     const [previewModalVisible, setPreviewModalVisible] = useState(false);
     const [previewData, setPreviewData] = useState(null);
+    const [sessionForm] = Form.useForm();
+    const [renewingSession, setRenewingSession] = useState(false);
     const tableContainerRef = useRef(null);
     const [tableScrollY, setTableScrollY] = useState(400);
     const [tableViewportWidth, setTableViewportWidth] = useState(0);
@@ -278,6 +284,29 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         onAction: handleRetry,
         danger: true
     });
+
+    useEffect(() => {
+        if (!sessionRenewalRequired) return;
+        const session = globalStore.get('session') || {};
+        sessionForm.setFieldsValue({
+            username: session.username || '',
+            language: session.language || globalStore.get('language') || 'tr-TR'
+        });
+    }, [sessionRenewalRequired, sessionForm]);
+
+    const handleSessionRenewal = async values => {
+        setRenewingSession(true);
+        try {
+            await renewSynergySession(values);
+            clearSessionRenewalRequired();
+            sessionForm.setFieldValue('password', '');
+            message.success('The Synergy session was renewed. You can continue with Pending + Failed.');
+        } catch (error) {
+            message.error(error.message || 'The Synergy session could not be renewed.');
+        } finally {
+            setRenewingSession(false);
+        }
+    };
 
     const resumeFailedPopoverContent = renderErrorTypeOptions({
         options: resumeFailedOptions,
@@ -983,27 +1012,57 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         <Card variant="borderless" className="exec-container" styles={{ body: { padding: '16px', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)' } }}>
             <div className="exec-header">
                 <div className="exec-header-copy">
-                    <Title level={3}>
-                        {isStopped ? 'Transfer Stopped' : isComplete ? 'Transfer Completed' : 'Queue Details & Transfer'}
-                    </Title>
-                    <Text type="secondary">Review summary rows and configure process execution</Text>
+                    <div className="exec-title-row">
+                        {definitionData?.replayRecoveredPayload && (
+                            <Popover
+                                trigger={['hover', 'click']}
+                                placement="bottomLeft"
+                                mouseEnterDelay={0.12}
+                                title="Safe replay mode"
+                                classNames={{ root: 'legacy-replay-popover' }}
+                                content={
+                                    <Text type="secondary" className="legacy-replay-info-text">
+                                        This legacy log does not contain a mapping snapshot. Only the preserved payloads
+                                        of selected Pending or Failed records will be replayed. Successful records are
+                                        not selected automatically.
+                                    </Text>
+                                }
+                            >
+                                <Button
+                                    type="text"
+                                    size="small"
+                                    icon={<InfoCircleOutlined />}
+                                    className="legacy-replay-info-button"
+                                    aria-label="Safe replay mode information"
+                                />
+                            </Popover>
+                        )}
+                        <Title level={3}>
+                            {isStopped ? 'Transfer Stopped' : isComplete ? 'Transfer Completed' : 'Queue Details & Transfer'}
+                        </Title>
+                    </div>
+                    <Text type="secondary" className="exec-header-subtitle">
+                        Review summary rows and configure process execution
+                    </Text>
                 </div>
-                <Segmented
-                    className="execution-mode-header"
-                    value={executionMode}
-                    onChange={setExecutionMode}
-                    disabled={loading && !isPausing && !isStopping}
-                    options={[
-                        {
-                            value: 'sequential',
-                            label: <Tooltip title="Synchronous: Processes Excel rows one by one in their queue order"><OrderedListOutlined /></Tooltip>
-                        },
-                        {
-                            value: 'parallel',
-                            label: <Tooltip title="Asynchronous: Processes up to 5 independent rows at the same time"><ThunderboltOutlined /></Tooltip>
-                        }
-                    ]}
-                />
+                <div className="exec-header-actions">
+                    <Segmented
+                        className="execution-mode-header"
+                        value={executionMode}
+                        onChange={setExecutionMode}
+                        disabled={loading && !isPausing && !isStopping}
+                        options={[
+                            {
+                                value: 'sequential',
+                                label: <Tooltip title="Synchronous: Processes Excel rows one by one in their queue order"><OrderedListOutlined /></Tooltip>
+                            },
+                            {
+                                value: 'parallel',
+                                label: <Tooltip title="Asynchronous: Processes up to 5 independent rows at the same time"><ThunderboltOutlined /></Tooltip>
+                            }
+                        ]}
+                    />
+                </div>
             </div>
 
             <Card className="exec-stats-wrapper" styles={{ body: { padding: '18px 22px' } }}>
@@ -1296,6 +1355,43 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 selectedLog={selectedLog}
                 onExportSingle={handleExportSingleLog}
             />
+
+            <Modal
+                title="Renew Synergy Session"
+                open={sessionRenewalRequired}
+                closable={false}
+                maskClosable={false}
+                keyboard={false}
+                okText="Renew Session"
+                cancelText="Daha Sonra"
+                confirmLoading={renewingSession}
+                onOk={() => sessionForm.submit()}
+                onCancel={() => message.info('The transfer is paused. Renew the session before continuing.')}
+            >
+                <Alert
+                    type="warning"
+                    showIcon
+                    message="The transfer was paused safely"
+                    description="The Synergy session expired. Sign in again here, then continue with Pending + Failed."
+                    style={{ marginBottom: 16 }}
+                />
+                <Form form={sessionForm} layout="vertical" onFinish={handleSessionRenewal}>
+                    <Form.Item name="language" label="Dil" rules={[{ required: true }]}>
+                        <Select
+                            options={[
+                                { value: 'tr-TR', label: 'Turkish' },
+                                { value: 'en-US', label: 'English' }
+                            ]}
+                        />
+                    </Form.Item>
+                    <Form.Item name="username" label="Username" rules={[{ required: true, message: 'Username is required' }]}>
+                        <Input autoComplete="username" />
+                    </Form.Item>
+                    <Form.Item name="password" label="Parola" rules={[{ required: true, message: 'Parola gerekli' }]}>
+                        <Input.Password autoComplete="current-password" onPressEnter={() => sessionForm.submit()} />
+                    </Form.Item>
+                </Form>
+            </Modal>
 
             <Modal
                 title={

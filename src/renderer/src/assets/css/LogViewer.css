@@ -1,0 +1,400 @@
+.log-viewer-load-shell {
+    flex: 1;
+    min-height: 0;
+    margin-bottom: 16px;
+    padding: 20px 30px;
+    overflow: auto;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    background: #ffffff;
+    box-sizing: border-box;
+}
+
+.log-viewer-load-content {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(0, 1fr);
+    gap: 16px;
+    width: min(880px, 100%);
+    height: 100%;
+    min-height: 0;
+    margin: 0 auto;
+}
+
+.log-viewer-recover-panel.ant-alert {
+    align-items: flex-start;
+    min-width: 0;
+    height: 100%;
+    margin-bottom: 0 !important;
+    padding: 20px;
+    overflow: hidden;
+    border: 1px solid #dbe4ef;
+    border-radius: 16px;
+    background: #fbfdff;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+.log-viewer-recover-panel .ant-alert-message {
+    width: 100%;
+    color: #334155;
+    font-weight: 600;
+}
+
+.log-viewer-recover-panel .ant-alert-description {
+    margin-top: 12px;
+}
+
+.log-viewer-recover-panel .log-viewer-session-card {
+    padding: 11px 12px !important;
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 10px !important;
+    background: #fff !important;
+    transition: border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.log-viewer-recover-panel .log-viewer-session-card:hover {
+    border-color: #bfdbfe !important;
+    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.05);
+}
+
+.log-viewer-session-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.log-viewer-session-heading .ant-typography {
+    display: block;
+}
+
+.log-viewer-session-heading .ant-typography-secondary {
+    margin-top: 2px;
+    font-size: 10px;
+    font-weight: 400;
+}
+
+.log-viewer-session-heading > span {
+    flex: 0 0 auto;
+    padding: 3px 8px;
+    border-radius: 999px;
+    color: #2563eb;
+    background: #dbeafe;
+    font-size: 10px;
+    font-weight: 700;
+}
+
+.log-viewer-session-mark {
+    display: flex;
+    flex: 0 0 30px;
+    align-items: center;
+    justify-content: center;
+    height: 30px;
+    border-radius: 8px;
+    color: #2563eb;
+    background: #eff6ff;
+}
+
+.log-viewer-session-copy {
+    flex: 1;
+    min-width: 0;
+}
+
+.log-viewer-recover-panel .log-viewer-session-card .ant-btn {
+    color: #475569;
+    border-color: #e2e8f0;
+    background: #fff;
+}
+
+.log-viewer-recover-panel .log-viewer-session-card .ant-btn:hover {
+    color: #2563eb !important;
+    border-color: #bfdbfe !important;
+    background: #eff6ff !important;
+}
+
+.log-viewer-file-dragger.ant-upload-wrapper {
+    min-width: 0;
+    min-height: 0;
+    height: 100%;
+}
+
+.log-viewer-file-dragger.ant-upload-wrapper .ant-upload-drag {
+    height: 100%;
+    border: 1.5px dashed #cbd5e1 !important;
+    border-radius: 16px !important;
+    background: #fbfdff !important;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+.log-viewer-file-dragger.ant-upload-wrapper .ant-upload-drag:hover {
+    border-color: #60a5fa !important;
+    background: #f5f9ff !important;
+}
+
+.log-viewer-file-dragger.ant-upload-wrapper .ant-upload {
+    padding: 38px 22px !important;
+}
+
+.log-viewer-file-dragger .ant-upload-drag-icon {
+    margin-bottom: 16px !important;
+}
+
+.log-viewer-file-dragger .ant-upload-drag-icon .anticon {
+    display: inline-flex;
+    width: 52px;
+    height: 52px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 14px;
+    color: #3b82f6 !important;
+    background: #eff6ff;
+    font-size: 24px !important;
+    opacity: 1 !important;
+}
+
+.log-viewer-file-dragger .ant-upload-text {
+    color: #334155 !important;
+    font-size: 15px !important;
+}
+
+.log-viewer-file-dragger .ant-upload-hint {
+    max-width: 230px;
+    margin: 6px auto 0 !important;
+    color: #94a3b8 !important;
+    line-height: 1.5;
+}
+
+.log-viewer-load-content > .log-viewer-file-dragger:only-child {
+    grid-column: 1 / -1;
+    width: 100%;
+    margin: 0;
+}
+
+.log-viewer-table-toolbar-row {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.log-viewer-metadata-bar {
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: center;
+    overflow: hidden;
+}
+
+.log-viewer-metadata-item {
+    display: flex;
+    flex: 0 0 auto;
+    min-width: 0;
+    flex-direction: column;
+    justify-content: center;
+    padding: 0 8px;
+    border-left: 1px solid #e2e8f0;
+}
+
+.log-viewer-metadata-item:first-child {
+    padding-left: 0;
+    border-left: 0;
+}
+
+.log-viewer-project-meta {
+    flex: 1 1 110px;
+    max-width: 150px;
+}
+
+.log-viewer-export-date-meta {
+    white-space: nowrap;
+}
+
+.log-viewer-table-actions {
+    display: flex;
+    flex: 0 0 auto;
+    height: 32px;
+    align-items: center;
+    gap: 6px;
+}
+
+.log-viewer-match-count {
+    min-width: 38px;
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: center;
+    user-select: none;
+}
+
+.log-viewer-search-input {
+    width: clamp(150px, 18vw, 190px) !important;
+}
+
+.log-viewer-recovery-banner.ant-alert {
+    margin-bottom: 10px !important;
+    padding: 11px 16px;
+    border-radius: 12px;
+}
+
+.log-viewer-recovery-banner .ant-alert-message {
+    font-size: 13px;
+}
+
+.log-viewer-recovery-banner .ant-alert-description {
+    margin-top: 2px;
+    font-size: 11px;
+}
+
+.log-viewer-stats-row {
+    margin-bottom: 10px;
+}
+
+.log-viewer-stat-card {
+    height: 68px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    background: #fff;
+    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.025);
+}
+
+.log-viewer-stat-card .ant-card-body {
+    height: 100%;
+    padding: 10px 14px;
+}
+
+.log-viewer-stat-content {
+    display: flex;
+    height: 100%;
+    align-items: center;
+    gap: 12px;
+}
+
+.log-viewer-stat-icon {
+    display: inline-flex;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 10px;
+    font-size: 18px;
+}
+
+.log-viewer-stat-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.log-viewer-stat-label {
+    color: #64748b;
+    font-size: 11px;
+    line-height: 14px;
+}
+
+.log-viewer-stat-value {
+    color: #1e293b;
+    font-size: 21px;
+    font-weight: 650;
+    line-height: 23px;
+}
+
+.log-viewer-stat-total .log-viewer-stat-icon {
+    color: #64748b;
+    background: #f1f5f9;
+}
+
+.log-viewer-stat-success .log-viewer-stat-icon {
+    color: #16a34a;
+    background: #ecfdf5;
+}
+
+.log-viewer-stat-success .log-viewer-stat-value {
+    color: #15803d;
+}
+
+.log-viewer-stat-failed .log-viewer-stat-icon {
+    color: #dc2626;
+    background: #fef2f2;
+}
+
+.log-viewer-stat-failed .log-viewer-stat-value {
+    color: #dc2626;
+}
+
+.log-viewer-results-card {
+    border: 1px solid #e2e8f0 !important;
+    border-radius: 15px !important;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+}
+
+.log-viewer-results-card .log-viewer-results-grid {
+    border: 0;
+    border-radius: 0 0 15px 15px;
+}
+
+.log-viewer-results-grid .ant-table-tbody-virtual .ant-table-row {
+    height: 34px !important;
+}
+
+.log-viewer-results-grid .ant-table-cell {
+    height: 34px;
+    padding: 0 10px !important;
+    text-align: left;
+}
+
+.log-viewer-results-grid .ant-table-thead > tr > th {
+    height: 34px;
+    padding: 0 10px !important;
+    text-align: left !important;
+}
+
+.log-viewer-details-button {
+    display: inline-flex;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 !important;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #dbeafe;
+    border-radius: 50%;
+    color: #3b82f6;
+    background: #eff6ff;
+    box-shadow: 0 1px 2px rgba(37, 99, 235, 0.08);
+}
+
+.log-viewer-details-button:hover,
+.log-viewer-details-button:focus-visible {
+    border-color: #93c5fd !important;
+    color: #2563eb !important;
+    background: #dbeafe !important;
+}
+
+.log-viewer-details-button .anticon {
+    font-size: 14px;
+}
+
+@media (max-width: 760px) {
+    .log-viewer-load-shell {
+        padding: 20px;
+    }
+
+    .log-viewer-load-content {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto;
+        height: auto;
+        min-height: 100%;
+    }
+
+    .log-viewer-recover-panel,
+    .log-viewer-file-dragger.ant-upload-wrapper {
+        grid-column: 1;
+    }
+
+    .log-viewer-file-dragger.ant-upload-wrapper {
+        min-height: 260px;
+    }
+}

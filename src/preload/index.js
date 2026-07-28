@@ -7,8 +7,10 @@ const api = {
     readFileAsBuffer: (filePath) => ipcRenderer.invoke('read-file-as-buffer', filePath),
     transferLogs: {
         reset: (metadata = {}) => ipcRenderer.invoke('transfer-log:reset', metadata),
+        saveContext: (context = {}) => ipcRenderer.invoke('transfer-log:save-context', context),
         append: (key, data) => ipcRenderer.invoke('transfer-log:append', { key, data }),
         get: (key) => ipcRenderer.invoke('transfer-log:get', key),
+        getRecoveredDetail: (sessionId, key) => ipcRenderer.invoke('transfer-log:get-recovered-detail', { sessionId, key }),
         getPath: () => ipcRenderer.invoke('transfer-log:path'),
         listRecoverable: () => ipcRenderer.invoke('transfer-log:list-recoverable'),
         recover: (sessionId = 'latest') => ipcRenderer.invoke('transfer-log:recover', sessionId),

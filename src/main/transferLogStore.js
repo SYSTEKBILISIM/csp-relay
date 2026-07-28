@@ -1,5 +1,5 @@
 import { createReadStream, createWriteStream } from 'fs'
-import { appendFile, mkdir, open, readdir, stat, writeFile } from 'fs/promises'
+import { appendFile, mkdir, open, readFile, readdir, stat, writeFile } from 'fs/promises'
 import { randomUUID } from 'crypto'
 import { createInterface } from 'readline'
 import { basename, dirname, join } from 'path'
@@ -10,6 +10,28 @@ export { optimizeLogValue } from '../shared/logValueOptimizer'
 const LEGACY_ACTIVE_FILE_NAME = 'active-transfer-log.jsonl'
 const LEGACY_PREVIOUS_FILE_NAME = 'last-transfer-log.jsonl'
 const SESSION_FILE_PREFIX = 'active-transfer-log_'
+const RECOVERY_CONTEXT_SUFFIX = '.context.json'
+const RECOVERY_SECRET_KEYS = new Set(['password', 'token', 'encrypteddata', 'authorization'])
+
+const getRecoveryContextPath = filePath => filePath.replace(/\.jsonl$/i, RECOVERY_CONTEXT_SUFFIX)
+
+const optimizeSheetRows = sheets => Object.fromEntries(
+    Object.entries(sheets || {}).map(([sheetName, rows]) => [
+        sheetName,
+        Array.isArray(rows) ? rows.map(row => optimizeLogValue(row)) : []
+    ])
+)
+
+const optimizeDefinition = definition => Object.fromEntries(
+    Object.entries(definition || {}).map(([key, value]) => [
+        key,
+        RECOVERY_SECRET_KEYS.has(String(key).toLowerCase())
+            ? '[REDACTED]'
+            : Array.isArray(value)
+            ? value.map(item => optimizeLogValue(item))
+            : optimizeLogValue(value, key, definition)
+    ])
+)
 
 const sanitizeFilePart = (value, fallback) => {
     const sanitized = String(value || fallback)
@@ -39,6 +61,7 @@ export class TransferLogStore {
         this.index = new Map()
         this.byteOffset = 0
         this.writeQueue = Promise.resolve()
+        this.scanCache = new Map()
     }
 
     async ensureDirectory(fallbackDirectory) {
@@ -81,6 +104,7 @@ export class TransferLogStore {
                 })}\n`
                 : ''
             await writeFile(this.filePath, metadataLine, 'utf8')
+            this.scanCache.delete(this.filePath)
             this.index.clear()
             this.byteOffset = Buffer.byteLength(metadataLine)
         })
@@ -91,12 +115,49 @@ export class TransferLogStore {
         }))
     }
 
+    saveContext(context = {}) {
+        this.writeQueue = this.writeQueue.then(async () => {
+            const recoveryContext = {
+                version: 1,
+                savedAt: new Date().toISOString(),
+                mainUrl: typeof context.mainUrl === 'string' ? context.mainUrl : undefined,
+                definitionData: optimizeDefinition(context.definitionData),
+                excelContent: optimizeSheetRows(context.excelContent),
+                selectedRowKeys: Array.isArray(context.selectedRowKeys)
+                    ? context.selectedRowKeys
+                    : []
+            }
+            await writeFile(
+                getRecoveryContextPath(this.filePath),
+                JSON.stringify(recoveryContext),
+                'utf8'
+            )
+            return {
+                success: true,
+                contextFilePath: getRecoveryContextPath(this.filePath)
+            }
+        })
+        return this.writeQueue
+    }
+
+    async readContext(filePath) {
+        try {
+            return JSON.parse(await readFile(getRecoveryContextPath(filePath), 'utf8'))
+        } catch {
+            return null
+        }
+    }
+
     async scanFile(filePath) {
         let fileStats
         try {
             fileStats = await stat(filePath)
         } catch {
             return { filePath, size: 0, modifiedAt: null, invalidLineCount: 0, metadata: {}, records: new Map() }
+        }
+        const cached = this.scanCache.get(filePath)
+        if (cached && cached.size === fileStats.size && cached.modifiedAtMs === fileStats.mtimeMs) {
+            return cached.scan
         }
 
         const records = new Map()
@@ -117,9 +178,13 @@ export class TransferLogStore {
                     if (record.recordType === 'transfer-metadata' && record.metadata && typeof record.metadata === 'object') {
                         metadata = record.metadata
                     } else if (record.key !== undefined && record.key !== null) {
+                        const { details, ...summary } = record
                         records.set(String(record.key), {
                             location: { offset: currentOffset, length: lineLength },
-                            record
+                            record: {
+                                ...summary,
+                                hasDetails: Boolean(details)
+                            }
                         })
                     }
                 } catch {
@@ -131,7 +196,7 @@ export class TransferLogStore {
             currentOffset += lineLength
         }
 
-        return {
+        const scan = {
             filePath,
             size: fileStats.size,
             modifiedAt: fileStats.mtime.toISOString(),
@@ -139,6 +204,12 @@ export class TransferLogStore {
             metadata,
             records
         }
+        this.scanCache.set(filePath, {
+            size: fileStats.size,
+            modifiedAtMs: fileStats.mtimeMs,
+            scan
+        })
+        return scan
     }
 
     async listRecoverable() {
@@ -159,6 +230,7 @@ export class TransferLogStore {
         for (const candidate of candidates) {
             const scan = await this.scanFile(candidate.filePath)
             if (scan.records.size === 0) continue
+            const recoveryContext = await this.readContext(candidate.filePath)
             const targetName = scan.metadata.flowName || scan.metadata.formName
             const targetType = scan.metadata.flowName ? 'Flow' : scan.metadata.formName ? 'Form' : scan.metadata.transactionType
             const labelParts = [
@@ -176,7 +248,8 @@ export class TransferLogStore {
                 transactionType: scan.metadata.transactionType,
                 flowName: scan.metadata.flowName,
                 formName: scan.metadata.formName,
-                logFileName: scan.metadata.logFileName || candidate.id
+                logFileName: scan.metadata.logFileName || candidate.id,
+                hasRecoveryContext: Boolean(recoveryContext)
             })
         }
 
@@ -196,6 +269,7 @@ export class TransferLogStore {
         if (!selected) return null
 
         const scan = await this.scanFile(selected.filePath)
+        const recoveryContext = await this.readContext(selected.filePath)
         const results = [...scan.records.values()]
             .sort((a, b) => a.location.offset - b.location.offset)
             .map(value => value.record)
@@ -206,6 +280,8 @@ export class TransferLogStore {
             recoverySource: selected.label,
             sourceFile: selected.filePath,
             recoveryWarningCount: scan.invalidLineCount,
+            recoverySessionId: selected.id,
+            recoveryContext,
             exportDate: new Date(selected.modifiedAt).toLocaleString(),
             results
         }
@@ -218,6 +294,7 @@ export class TransferLogStore {
             const length = Buffer.byteLength(line)
             const offset = this.byteOffset
             await appendFile(this.filePath, line, 'utf8')
+            this.scanCache.delete(this.filePath)
             this.index.set(String(key), { offset, length })
             this.byteOffset += length
         })
@@ -230,6 +307,27 @@ export class TransferLogStore {
         if (!location) return null
 
         const handle = await open(this.filePath, 'r')
+        try {
+            const buffer = Buffer.alloc(location.length)
+            await handle.read(buffer, 0, location.length, location.offset)
+            const record = JSON.parse(buffer.toString('utf8').trim())
+            return record.details || null
+        } finally {
+            await handle.close()
+        }
+    }
+
+    async getRecoveredDetail(sessionId, key) {
+        await this.writeQueue
+        const sessions = await this.listRecoverable()
+        const selected = sessions.find(session => session.id === sessionId)
+        if (!selected) return null
+
+        const scan = await this.scanFile(selected.filePath)
+        const location = scan.records.get(String(key))?.location
+        if (!location) return null
+
+        const handle = await open(selected.filePath, 'r')
         try {
             const buffer = Buffer.alloc(location.length)
             await handle.read(buffer, 0, location.length, location.offset)

@@ -1,5 +1,24 @@
 import { globalStore } from '../store/GlobalStore';
 
+const getSafeRequestBodyForLog = body => {
+    if (!body) return ''
+
+    try {
+        const parsed = typeof body === 'string' ? JSON.parse(body) : body
+        if (!parsed || typeof parsed !== 'object') return body
+        const safeBody = { ...parsed }
+        if (Object.prototype.hasOwnProperty.call(safeBody, 'Password')) {
+            safeBody.Password = safeBody.Password ? '[REDACTED]' : safeBody.Password
+        }
+        if (Object.prototype.hasOwnProperty.call(safeBody, 'password')) {
+            safeBody.password = safeBody.password ? '[REDACTED]' : safeBody.password
+        }
+        return safeBody
+    } catch {
+        return body
+    }
+}
+
 export class ApiClient {
     constructor(baseUrl = '') {
         this.baseUrl = baseUrl;
@@ -30,7 +49,7 @@ export class ApiClient {
             },
         };
 
-        console.log(`[API] ${config.method || 'GET'} ${url}`, config.body ? config.body : '');
+        console.log(`[API] ${config.method || 'GET'} ${url}`, getSafeRequestBodyForLog(config.body));
 
         const maxRetries = 3;
         let response = null;
@@ -84,14 +103,14 @@ export class ApiClient {
                 // 2. Map HTTP statuses if no message found yet
                 if (!errorMessage) {
                     const statusMessages = {
-                        400: 'Hatalı istek. Lütfen girilen bilgileri kontrol edin.',
-                        401: 'Oturum geçersiz. Yeniden giriş yapmanız gerekebilir.',
-                        403: 'Erişim engellendi. Bu sayfaya giriş yetkiniz bulunmuyor.',
-                        404: 'Sayfa bulunamadı. Lütfen URL adresini kontrol edin.',
-                        500: 'Sunucu hatası. Sistemsel bir sorun oluştu.',
-                        502: 'Sunucu yanıt vermiyor. Lütfen daha sonra tekrar deneyin.',
-                        503: 'Hizmet şu anda kullanılamıyor. Sunucu bakımda olabilir.',
-                        504: 'Bağlantı zaman aşımına uğradı. Sunucu çok geç yanıt verdi.'
+                        400: 'Bad request. Please check the submitted information.',
+                        401: 'The session is invalid. You may need to sign in again.',
+                        403: 'Access denied. You do not have permission to access this page.',
+                        404: 'Page not found. Please check the URL.',
+                        500: 'Server error. An internal problem occurred.',
+                        502: 'The server is not responding. Please try again later.',
+                        503: 'The service is currently unavailable. The server may be under maintenance.',
+                        504: 'The connection timed out because the server responded too slowly.'
                     };
 
                     const friendlyStatus = statusMessages[response.status];
@@ -106,13 +125,13 @@ export class ApiClient {
                     if (friendlyStatus) {
                         errorMessage = friendlyStatus;
                     } else {
-                        errorMessage = processedText || `İstek başarısız (Status: ${response.status})`;
+                        errorMessage = processedText || `Request failed (Status: ${response.status})`;
                     }
                 }
 
                 // specifically handle 511 Network Authentication Required (often used for invalid login in some environments)
                 if (response.status === 511) {
-                    errorMessage = 'Kullanıcı adı veya şifre hatalı. Lütfen bilgilerinizi kontrol edin.';
+                    errorMessage = 'The username or password is incorrect. Please check your credentials.';
                 }
 
                 throw new Error(errorMessage);

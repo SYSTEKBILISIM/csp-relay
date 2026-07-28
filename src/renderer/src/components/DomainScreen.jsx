@@ -1,20 +1,23 @@
 import React, { useState } from 'react';
 import { Card, Input, Button, Typography, message } from 'antd';
-import { GlobalOutlined, LinkOutlined, FileTextOutlined } from '@ant-design/icons';
-import { apiClient } from '../api/client';
-import { globalStore } from '../store/GlobalStore';
+import { LinkOutlined, FileTextOutlined } from '@ant-design/icons';
+import { connectSynergyDomain } from '../services/DomainService';
 import logo from '../assets/csp-relay.png';
 import '../assets/css/DomainScreen.css';
 
 const { Title, Text } = Typography;
 
-export const DomainScreen = ({ onConnect, onOpenViewer }) => {
-    const [domain, setDomain] = useState('');
+export const DomainScreen = ({
+    onConnect,
+    onOpenViewer,
+    initialDomain = ''
+}) => {
+    const [domain, setDomain] = useState(initialDomain);
     const [loading, setLoading] = useState(false);
     const [messageApi, contextHolder] = message.useMessage();
 
-    const handleConnect = async () => {
-        let cleanDomain = domain.trim();
+    const handleConnect = async (domainOverride = null) => {
+        let cleanDomain = String(domainOverride || domain).trim();
         while (cleanDomain.endsWith('/')) {
             cleanDomain = cleanDomain.slice(0, -1);
         }
@@ -24,36 +27,20 @@ export const DomainScreen = ({ onConnect, onOpenViewer }) => {
             return;
         }
 
-
         setLoading(true);
         try {
             console.log(`Checking connection to: ${cleanDomain}`);
-
-            const payload = {
-                DomainAddress: cleanDomain,
-                Source: 'WebInterface'
-            };
-
-            // Set base url immediately to test connectivity
-            apiClient.setBaseUrl(cleanDomain);
-
-            const result = await apiClient.post('/api/web/Login/GetLoginParameters', payload);
+            const { loginParameters: result } = await connectSynergyDomain(cleanDomain);
 
             console.log('Connection successful:', result);
             messageApi.success('Connected successfully to Synergy CSP');
 
-            // Store response and domain
-            globalStore.set('loginParameters', result);
-            globalStore.set('mainUrl', cleanDomain);
-
-            // Delay slightly for UX
             setTimeout(() => {
                 if (onConnect) onConnect(cleanDomain);
             }, 500);
-
         } catch (err) {
             console.error('Connection failed:', err);
-            messageApi.error(`Bağlantı hatası: ${err.message}`);
+            messageApi.error(`Connection failed: ${err.message}`);
         } finally {
             setLoading(false);
         }
@@ -85,8 +72,8 @@ export const DomainScreen = ({ onConnect, onOpenViewer }) => {
                     placeholder="Domain Address"
                     prefix={<LinkOutlined style={{ color: '#94a3b8' }} />}
                     value={domain}
-                    onChange={(e) => setDomain(e.target.value)}
-                    onPressEnter={handleConnect}
+                    onChange={(event) => setDomain(event.target.value)}
+                    onPressEnter={() => handleConnect()}
                     className="domain-input"
                 />
 
@@ -94,7 +81,7 @@ export const DomainScreen = ({ onConnect, onOpenViewer }) => {
                     type="primary"
                     size="large"
                     block
-                    onClick={handleConnect}
+                    onClick={() => handleConnect()}
                     loading={loading}
                     className="domain-btn-gradient"
                 >
@@ -105,9 +92,9 @@ export const DomainScreen = ({ onConnect, onOpenViewer }) => {
                     <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 12, fontWeight: 500 }}>
                         ANALYSIS TOOLS
                     </Text>
-                    <Button 
-                        type="default" 
-                        icon={<FileTextOutlined style={{ color: '#0ea5e9' }} />} 
+                    <Button
+                        type="default"
+                        icon={<FileTextOutlined style={{ color: '#0ea5e9' }} />}
                         onClick={onOpenViewer}
                         block
                         className="domain-viewer-btn"
@@ -116,7 +103,7 @@ export const DomainScreen = ({ onConnect, onOpenViewer }) => {
                         Analyze Transfer Logs
                     </Button>
                     <Text type="secondary" style={{ fontSize: 10, display: 'block', marginTop: 8 }}>
-                        View details from previously exported .json log files
+                        Review details from previous transfer logs
                     </Text>
                 </div>
             </Card>
