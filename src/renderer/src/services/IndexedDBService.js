@@ -5,13 +5,22 @@ class FileLogService {
         return window.api?.transferLogs
     }
 
-    async saveDetail(key, details, summary = {}, rowData = {}) {
+    async saveDetail(key, details, summary = {}) {
         if (!this.api) throw new Error('File log API is unavailable.')
+        const { details: _summaryDetails, ...summaryWithoutDetails } = summary
+        const checkpointDetails = {
+            warnings: details?.warnings || [],
+            executionLog: (details?.executionLog || []).map(step => ({
+                key: step.key,
+                step: step.step,
+                details: step.details,
+                status: step.status
+            }))
+        }
         return this.api.append(key, optimizeLogValue({
-            ...summary,
+            ...summaryWithoutDetails,
             key,
-            details,
-            rowData
+            details: checkpointDetails
         }))
     }
 
@@ -23,6 +32,11 @@ class FileLogService {
     async getRecoveredDetail(sessionId, key) {
         if (!this.api) return null
         return this.api.getRecoveredDetail(sessionId, key)
+    }
+
+    async getRecoveredReplayPayload(sessionId, key) {
+        if (!this.api) return null
+        return this.api.getRecoveredReplayPayload(sessionId, key)
     }
 
     async clearAll(metadata = {}) {

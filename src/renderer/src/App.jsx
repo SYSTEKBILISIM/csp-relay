@@ -11,6 +11,7 @@ import { StepIndicator } from './components/StepIndicator';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { LogViewer } from './components/LogViewer';
 import { globalStore } from './store/GlobalStore';
+import { parseExcelFilePath } from './services/ExcelService';
 import './assets/css/App.css';
 
 // AntD Layout Components
@@ -60,10 +61,34 @@ function App() {
         setCurrent(2);
     };
 
-    const handleRestoreSession = (recovered) => {
+    const handleRestoreSession = async (recovered) => {
         const savedDefinition = recovered?.recoveryContext?.definitionData;
+        if (!savedDefinition) {
+            throw new Error('This legacy log does not contain a checkpoint definition and cannot be resumed.');
+        }
+
+        let excelSourcePath = recovered?.recoveryContext?.excelSourcePath ||
+            savedDefinition.excelSourcePath ||
+            '';
+        let sourceInfo = excelSourcePath
+            ? await window.api?.readFileInfo?.(excelSourcePath)
+            : null;
+
+        if (!sourceInfo?.success) {
+            const selection = await window.api?.selectExcelFile?.();
+            if (!selection?.success || !selection.filePath) {
+                throw new Error('The Excel source file is unavailable. Select the source file to resume this checkpoint.');
+            }
+            excelSourcePath = selection.filePath;
+            sourceInfo = await window.api?.readFileInfo?.(excelSourcePath);
+            if (!sourceInfo?.success) {
+                throw new Error(sourceInfo?.error || 'The selected Excel source file could not be read.');
+            }
+        }
+
+        const parsedExcel = await parseExcelFilePath(excelSourcePath);
         const definitionData = {
-            ...(savedDefinition || {}),
+            ...savedDefinition,
             projectName: recovered.projectName,
             transactionType: recovered.transactionType,
             deployAgent: recovered.deployAgent,
@@ -73,25 +98,19 @@ function App() {
             startingEventCode: recovered.startingEventCode,
             mainIdColumn: recovered.mainIdColumn,
             mainSheet: recovered.mainSheet,
-            fileName: recovered.fileName,
-            replayRecoveredPayload: !savedDefinition,
+            fileName: sourceInfo.name || recovered.fileName,
+            excelSourcePath,
             recoveredSession: {
                 id: recovered.recoverySessionId,
                 source: recovered.recoverySource,
-                results: recovered.results
+                results: recovered.results,
+                selectedRowKeys: recovered.recoveryContext?.selectedRowKeys
             }
         };
         const mainSheet = definitionData.mainSheet || 'Recovered';
         definitionData.mainSheet = mainSheet;
-
-        let excelContent = recovered?.recoveryContext?.excelContent;
-        if (!excelContent?.[mainSheet]) {
-            const recoveredRows = [];
-            for (const [index, record] of (recovered.results || []).entries()) {
-                const numericKey = Number(record.key);
-                recoveredRows[Number.isFinite(numericKey) ? numericKey : index] = record.rowData || {};
-            }
-            excelContent = { [mainSheet]: recoveredRows };
+        if (!parsedExcel.fileContent?.[mainSheet]) {
+            throw new Error(`The selected Excel file does not contain the checkpoint sheet '${mainSheet}'.`);
         }
 
         const selectedAgent = deployAgents.find(agent =>
@@ -107,13 +126,18 @@ function App() {
         globalStore.set('formName', definitionData.formName);
         globalStore.set('flowDocumentName', definitionData.flowDocumentName);
         globalStore.set('startingEventCode', definitionData.startingEventCode);
-        globalStore.set('excelContent', excelContent);
+        globalStore.set('excelSheets', parsedExcel.sheets);
+        globalStore.set('excelColumns', parsedExcel.sheetColumns);
+        globalStore.set('excelContent', parsedExcel.fileContent);
+        globalStore.set('excelSourcePath', excelSourcePath);
+        globalStore.set('transferFile', excelSourcePath);
         setStepData(prev => ({
             ...prev,
             project: definitionData,
             definition: definitionData
         }));
         setCurrent(4);
+        return true;
     };
 
     const handleProjectSetup = (data) => {

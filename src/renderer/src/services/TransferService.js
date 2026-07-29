@@ -15,6 +15,9 @@ const RELAY_CSP_APP_NAME = 'Systek_SynergyCSPRelay';
 const DEFAULT_API_PAGE_SIZE = 200;
 const RELAY_UPLOAD_CHUNK_BYTES = 2.5 * 1024 * 1024;
 const RELAY_SESSION_FILE_CHUNK_CHARS = 2 * 1024 * 1024;
+const RECOVERY_BINARY_CHUNK_BYTES = 1.5 * 1024 * 1024;
+const RECOVERY_BINARY_TYPE = 'recovery-binary';
+const LOCAL_FILE_REFERENCE_TYPE = 'local-file';
 
 const normalizeControlText = value => value === null || value === undefined
     ? null
@@ -63,6 +66,86 @@ function getApiPageSize(parsedBody) {
     return Number.isFinite(configuredTake) && configuredTake > 0 ? configuredTake : DEFAULT_API_PAGE_SIZE;
 }
 
+async function readApiCache(apiCache, cacheKey) {
+    if (!apiCache) return undefined;
+    if (apiCache instanceof Map) {
+        if (!apiCache.has(cacheKey)) return undefined;
+        const value = apiCache.get(cacheKey);
+        apiCache.delete(cacheKey);
+        apiCache.set(cacheKey, value);
+        return value;
+    }
+    return apiCache.get(cacheKey);
+}
+
+async function writeApiCache(apiCache, cacheKey, value) {
+    if (!apiCache) return;
+    if (apiCache instanceof Map) {
+        apiCache.set(cacheKey, value);
+        return;
+    }
+    await apiCache.set(cacheKey, value);
+}
+
+function hasUnrecoverableBinaryPlaceholder(value) {
+    if (value?.omitted === true && (value?.type === 'binary-string' || value?.type === 'byte-array')) {
+        return true;
+    }
+    if (!value || typeof value !== 'object') return false;
+    if (Array.isArray(value)) return value.some(hasUnrecoverableBinaryPlaceholder);
+    return Object.values(value).some(hasUnrecoverableBinaryPlaceholder);
+}
+
+function extractRecoveredRelatedGridJobs(flowPayload) {
+    const beginPayload = _.cloneDeep(flowPayload);
+    const jobs = [];
+    for (const document of beginPayload.FlowDocuments || []) {
+        for (const relatedGrid of document?.FormFields?.RelatedGrids || []) {
+            if (Array.isArray(relatedGrid.Rows) && relatedGrid.Rows.length > 0) {
+                jobs.push({
+                    documentName: document.DocumentName,
+                    relatedGrid: _.cloneDeep(relatedGrid)
+                });
+            }
+        }
+        if (document?.FormFields) document.FormFields.RelatedGrids = [];
+    }
+    return { beginPayload, jobs };
+}
+
+async function postRecoveredTransferJson(baseUrl, headers, endpoint, body, executionLog, details = '') {
+    const url = `${baseUrl}/${endpoint}`;
+    const logEntry = {
+        key: `recovered_${endpoint}_${Date.now()}_${Math.random()}`,
+        step: endpoint,
+        details: details || `Endpoint: ${endpoint}`,
+        status: 'Pending'
+    };
+    executionLog.push(logEntry);
+
+    const response = await fetchWithRetry(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body)
+    });
+    const responseBody = response.ok ? await response.json() : await response.text();
+    logEntry.raw = {
+        request: { url, method: 'POST', headers, body },
+        response: responseBody
+    };
+
+    if (!response.ok) {
+        logEntry.status = 'Error';
+        const error = new Error(`${endpoint} failed (HTTP ${response.status} ${response.statusText})`);
+        error.status = response.status;
+        error.statusText = response.statusText;
+        error.rawResponse = responseBody;
+        throw error;
+    }
+    logEntry.status = 'Success';
+    return responseBody;
+}
+
 export const replayRecoveredTransferPayload = async (payload, definitionData, store) => {
     const executionLog = [{
         key: `recovered_${Date.now()}_${Math.random()}`,
@@ -73,6 +156,11 @@ export const replayRecoveredTransferPayload = async (payload, definitionData, st
     try {
         if (!payload || typeof payload !== 'object') {
             throw new Error('No replayable payload was found in the recovered record.');
+        }
+        if (hasUnrecoverableBinaryPlaceholder(payload)) {
+            const error = new Error('This legacy log does not contain the original file bytes. Rerun this row from its original source instead of replaying the optimized log.');
+            error.unrecoverableRecovery = true;
+            throw error;
         }
         const deployUrl = store.get('deployUrl');
         if (!deployUrl) throw new Error('No deploy URL was found for the selected deploy agent.');
@@ -90,23 +178,95 @@ export const replayRecoveredTransferPayload = async (payload, definitionData, st
         if (token) headers.Authorization = `Bearer ${token}`;
         if (encryptedData) headers['bimser-encrypted-data'] = encryptedData;
 
-        const url = `${deployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer/${endpoint}`;
-        const response = await fetchWithRetry(url, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(payload)
-        });
-        const responseBody = response.ok ? await response.json() : await response.text();
-        executionLog[0].raw = {
-            request: { url, method: 'POST', headers, body: payload },
-            response: responseBody
-        };
-        if (!response.ok) {
-            const error = new Error(`${endpoint} failed (HTTP ${response.status} ${response.statusText})`);
-            error.status = response.status;
-            error.statusText = response.statusText;
-            error.rawResponse = responseBody;
-            throw error;
+        const baseUrl = `${deployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer`;
+        let responseBody;
+
+        if (transactionType === 'CreateFlow') {
+            const { beginPayload, jobs } = extractRecoveredRelatedGridJobs(payload);
+            if (jobs.length > 0) {
+                const capabilities = await postRecoveredTransferJson(
+                    baseUrl,
+                    headers,
+                    'Capabilities',
+                    {},
+                    executionLog,
+                    'Checking recovered file-transfer support'
+                );
+                if (capabilities?.SessionFileChunks !== true && capabilities?.sessionFileChunks !== true) {
+                    const error = new Error('The deployed relay does not support recoverable session file chunks.');
+                    error.relayCapabilityMissing = true;
+                    throw error;
+                }
+
+                const beginResponse = await postRecoveredTransferJson(
+                    baseUrl,
+                    headers,
+                    'BeginFlowSession',
+                    beginPayload,
+                    executionLog
+                );
+                const sessionId = beginResponse?.sessionId || beginResponse?.SessionId;
+                if (!sessionId) throw new Error('BeginFlowSession response did not include sessionId.');
+
+                const relatedGridChunkSize = definitionData?.relatedGridChunkSize !== undefined
+                    ? definitionData.relatedGridChunkSize
+                    : (store.get('relatedGridChunkSize') !== undefined ? store.get('relatedGridChunkSize') : 5);
+
+                for (const job of jobs) {
+                    const rows = job.relatedGrid.Rows || [];
+                    for (let index = 0; index < rows.length; index += relatedGridChunkSize) {
+                        const chunkRows = rows.slice(index, index + relatedGridChunkSize);
+                        await stageRelatedGridFilesForSession(
+                            baseUrl,
+                            headers,
+                            sessionId,
+                            chunkRows,
+                            executionLog,
+                            definitionData?.recoveredSession?.id
+                        );
+                        await postRecoveredTransferJson(
+                            baseUrl,
+                            headers,
+                            'AppendRelatedGridRows',
+                            {
+                                SessionId: sessionId,
+                                DocumentName: job.documentName,
+                                RelatedGrid: {
+                                    ...job.relatedGrid,
+                                    WriteMode: index === 0 ? (job.relatedGrid.WriteMode || 'Append') : 'Append',
+                                    Rows: chunkRows
+                                }
+                            },
+                            executionLog,
+                            `${job.relatedGrid.FieldName}: rows ${index + 1}-${index + chunkRows.length}/${rows.length}`
+                        );
+                    }
+                }
+
+                responseBody = await postRecoveredTransferJson(
+                    baseUrl,
+                    headers,
+                    'FinalizeFlowSession',
+                    { SessionId: sessionId },
+                    executionLog
+                );
+            } else {
+                responseBody = await postRecoveredTransferJson(
+                    baseUrl,
+                    headers,
+                    endpoint,
+                    payload,
+                    executionLog
+                );
+            }
+        } else {
+            responseBody = await postRecoveredTransferJson(
+                baseUrl,
+                headers,
+                endpoint,
+                payload,
+                executionLog
+            );
         }
 
         const saveResponse = responseBody?.saveResponse || responseBody;
@@ -117,6 +277,9 @@ export const replayRecoveredTransferPayload = async (payload, definitionData, st
         ].map(error => error?.message).filter(Boolean);
         const isValidationError = saveResponse?.actionResult === false || validationErrors.length > 0;
         executionLog[0].status = isValidationError ? 'Error' : 'Success';
+        executionLog[0].details = isValidationError
+            ? 'Recovered payload validation failed'
+            : 'Recovered payload replay completed';
 
         return {
             status: isValidationError ? 'ValidationError' : 'Success',
@@ -133,16 +296,20 @@ export const replayRecoveredTransferPayload = async (payload, definitionData, st
             warnings: []
         };
     } catch (error) {
+        const missingRecoveryAssets = /ENOENT|no such file|cannot find the (?:file|path)/i.test(String(error?.message || ''));
+        const failureMessage = missingRecoveryAssets
+            ? 'The recovery file store is missing. Copy the matching .recovery folder next to the active JSONL log and retry.'
+            : getTransferFailureMessage(error);
         executionLog[0].status = 'Error';
-        executionLog[0].details = getTransferFailureMessage(error);
+        executionLog[0].details = failureMessage;
         return {
             status: 'Error',
-            message: getTransferFailureMessage(error),
+            message: failureMessage,
             payload,
             response: error.rawResponse || null,
             executionLog,
             warnings: [],
-            autoPauseTransfer: isConnectivityFailure(error),
+            autoPauseTransfer: missingRecoveryAssets || error.unrecoverableRecovery === true || isConnectivityFailure(error),
             requiresAuthentication: isExpiredSynergySessionFailure(error)
         };
     }
@@ -313,13 +480,13 @@ async function fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, respo
  *
  * @param {string} baseUrl  - base Transfer API URL (without trailing slash)
  * @param {object} headers  - common auth headers (Authorization, bimser-encrypted-data, bimser-language)
- * @param {object} fileInfo - { name, contentType, size, buffer } from readFileAsBuffer
+ * @param {object} fileInfo - { filePath, name, contentType, size } from readFileInfo
  * @param {string} targetPath - The full target folder path (e.g. "DOCUMENTS/ENVRA/FIRMALAR")
  * @param {string} category - RelatedDocuments category/library caption (e.g. "DOCUMENTS")
  * @param {object} executionLog - shared execution log array for diagnostics
  */
 async function uploadFileInParts(baseUrl, headers, fileInfo, targetPath, category, executionLog) {
-    const { name, contentType, size, buffer } = fileInfo;
+    const { filePath, name, contentType, size } = fileInfo;
     const normalizedTargetPath = normalizeDocumentTargetPath(targetPath);
     const resolvedCategory = category || (normalizedTargetPath ? getDocumentPathLibrary(normalizedTargetPath) : null);
 
@@ -366,9 +533,6 @@ async function uploadFileInParts(baseUrl, headers, fileInfo, targetPath, categor
         throw new Error(`CreateFileParts response missing fileSecretKey or uploadParts for "${name}"`);
     }
 
-    // Convert plain array (from IPC) to Uint8Array for slicing
-    const byteArray = new Uint8Array(buffer);
-
     const normalizedUploadParts = uploadParts.map(part => ({
         id: part.id,
         startByte: part.startByte,
@@ -388,18 +552,22 @@ async function uploadFileInParts(baseUrl, headers, fileInfo, targetPath, categor
         };
         executionLog.push(partLog);
 
-        // Slice the file into relay-safe chunks and convert to base64.
-        const slice = byteArray.slice(chunkStart, chunkEndExclusive);
-        let binary = '';
-        for (let i = 0; i < slice.length; i++) binary += String.fromCharCode(slice[i]);
-        const chunkBase64 = btoa(binary);
+        const chunk = await window.api.readFileChunkBase64(
+            filePath,
+            chunkStart,
+            chunkEndExclusive - chunkStart
+        );
+        if (!chunk?.success) {
+            throw new Error(`Failed to read "${name}" chunk #${chunkIndex}: ${chunk?.error || 'Unknown error'}`);
+        }
+        const chunkBase64 = chunk.data;
 
         const uploadBody = {
             FileSecretKey: fileSecretKey,
             UploadParts: normalizedUploadParts,
             ContentType: contentType,
             Data: chunkBase64,
-            DataLength: slice.length,
+            DataLength: chunk.bytesRead,
             ChunkStartByte: chunkStart,
             TotalFileBytes: size
         };
@@ -428,7 +596,7 @@ async function uploadFileInParts(baseUrl, headers, fileInfo, targetPath, categor
                 dataTruncated: true,
                 fullDataSent: true,
                 dataLength: chunkBase64.length,
-                rawByteLength: slice.length,
+                rawByteLength: chunk.bytesRead,
                 chunkStartByte: chunkStart,
                 chunkEndByte: chunkEndExclusive - 1,
                 totalFileBytes: size,
@@ -472,17 +640,29 @@ async function uploadFileInParts(baseUrl, headers, fileInfo, targetPath, categor
     };
 }
 
-function fileInfoToRelatedDocumentItem(fileInfo, targetPath = null, category = null) {
-    const { name, contentType, size, buffer } = fileInfo;
-    const byteArray = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < byteArray.length; i++) binary += String.fromCharCode(byteArray[i]);
+async function fileInfoToRelatedDocumentItem(fileInfo, targetPath = null, category = null, deferBinary = false) {
+    const { filePath, name, contentType, size } = fileInfo;
+    let data;
+    if (deferBinary) {
+        data = {
+            type: LOCAL_FILE_REFERENCE_TYPE,
+            filePath,
+            byteLength: size,
+            encodedLength: Math.ceil(size / 3) * 4
+        };
+    } else {
+        const fileResult = await window.api.readFileAsBase64(filePath);
+        if (!fileResult?.success) {
+            throw new Error(`Failed to read "${name}" as base64: ${fileResult?.error || 'Unknown error'}`);
+        }
+        data = fileResult.data;
+    }
 
     return {
         Name: name,
         Description: name,
         ContentType: contentType || 'application/octet-stream',
-        Data: btoa(binary),
+        Data: data,
         FileSize: size,
         Category: category || null,
         Path: normalizeDocumentTargetPath(targetPath) || null
@@ -496,7 +676,10 @@ function collectEmbeddedRelatedDocumentItems(rows = []) {
             const formFields = row?.FormFields;
             for (const relatedDocuments of formFields?.RelatedDocuments || []) {
                 for (const item of relatedDocuments?.Items || []) {
-                    if (!item?.FileSecretKey && typeof item?.Data === 'string' && item.Data.length > 0) {
+                    const isInlineBinary = typeof item?.Data === 'string' && item.Data.length > 0;
+                    const isRecoveryBinary = item?.Data?.persisted === true && item?.Data?.type === RECOVERY_BINARY_TYPE;
+                    const isLocalFile = item?.Data?.type === LOCAL_FILE_REFERENCE_TYPE && item?.Data?.filePath;
+                    if (!item?.FileSecretKey && (isInlineBinary || isRecoveryBinary || isLocalFile)) {
                         items.push(item);
                     }
                 }
@@ -510,23 +693,70 @@ function collectEmbeddedRelatedDocumentItems(rows = []) {
     return items;
 }
 
-async function stageRelatedGridFilesForSession(baseUrl, headers, sessionId, rows, executionLog) {
+async function stageRelatedGridFilesForSession(baseUrl, headers, sessionId, rows, executionLog, recoverySessionId = null) {
     const embeddedItems = collectEmbeddedRelatedDocumentItems(rows);
 
     for (const item of embeddedItems) {
-        const encodedData = item.Data;
+        const recoveryReference = item.Data?.persisted === true && item.Data?.type === RECOVERY_BINARY_TYPE
+            ? item.Data
+            : null;
+        const localFileReference = item.Data?.type === LOCAL_FILE_REFERENCE_TYPE
+            ? item.Data
+            : null;
+        const encodedData = recoveryReference || localFileReference ? null : item.Data;
         const uploadToken = crypto.randomUUID().replace(/-/g, '');
-        const totalChunks = Math.ceil(encodedData.length / RELAY_SESSION_FILE_CHUNK_CHARS);
+        const totalEncodedLength = recoveryReference?.encodedLength ||
+            localFileReference?.encodedLength ||
+            encodedData.length;
+        const totalChunks = recoveryReference
+            ? Math.ceil(recoveryReference.byteLength / RECOVERY_BINARY_CHUNK_BYTES)
+            : localFileReference
+                ? Math.ceil(localFileReference.byteLength / RECOVERY_BINARY_CHUNK_BYTES)
+            : Math.ceil(encodedData.length / RELAY_SESSION_FILE_CHUNK_CHARS);
+        let encodedStart = 0;
+        let byteOffset = 0;
 
-        for (let chunkStart = 0, chunkIndex = 1; chunkStart < encodedData.length; chunkStart += RELAY_SESSION_FILE_CHUNK_CHARS, chunkIndex++) {
-            const chunkData = encodedData.slice(chunkStart, chunkStart + RELAY_SESSION_FILE_CHUNK_CHARS);
+        for (let chunkIndex = 1; chunkIndex <= totalChunks; chunkIndex++) {
+            let chunkData;
+            if (recoveryReference) {
+                if (!recoverySessionId || !window.api?.transferLogs?.readRecoveryBinaryChunk) {
+                    throw new Error(`Recovery binary reader is unavailable for "${item.Name || 'RelatedDocument'}".`);
+                }
+                const chunk = await window.api.transferLogs.readRecoveryBinaryChunk(
+                    recoverySessionId,
+                    recoveryReference.relativePath,
+                    byteOffset,
+                    RECOVERY_BINARY_CHUNK_BYTES
+                );
+                chunkData = chunk?.data || '';
+                byteOffset = chunk?.nextByteOffset ?? byteOffset;
+            } else if (localFileReference) {
+                if (!window.api?.readFileChunkBase64) {
+                    throw new Error(`Local file chunk reader is unavailable for "${item.Name || 'RelatedDocument'}".`);
+                }
+                const chunk = await window.api.readFileChunkBase64(
+                    localFileReference.filePath,
+                    byteOffset,
+                    RECOVERY_BINARY_CHUNK_BYTES
+                );
+                if (!chunk?.success) {
+                    throw new Error(`Failed to read "${item.Name || 'RelatedDocument'}": ${chunk?.error || 'Unknown error'}`);
+                }
+                chunkData = chunk.data || '';
+                byteOffset = chunk.nextByteOffset ?? byteOffset;
+            } else {
+                chunkData = encodedData.slice(
+                    encodedStart,
+                    encodedStart + RELAY_SESSION_FILE_CHUNK_CHARS
+                );
+            }
             const uploadBody = {
                 SessionId: sessionId,
                 UploadToken: uploadToken,
                 Data: chunkData,
                 DataLength: chunkData.length,
-                ChunkStart: chunkStart,
-                TotalEncodedLength: encodedData.length
+                ChunkStart: encodedStart,
+                TotalEncodedLength: totalEncodedLength
             };
             const uploadUrl = `${baseUrl}/UploadSessionFileChunk`;
             const uploadLog = {
@@ -563,6 +793,7 @@ async function stageRelatedGridFilesForSession(baseUrl, headers, sessionId, rows
                 throw error;
             }
             uploadLog.status = 'Success';
+            encodedStart += chunkData.length;
         }
 
         item.TransferFileToken = uploadToken;
@@ -610,11 +841,11 @@ async function executeDocumentTransfer(rowData, definitionData, globalStore, exe
     if (!targetPath) {
         throw new Error(`CSP target path is empty in Excel column '${definitionData.cspPathColumn || ''}'.`);
     }
-    if (!window.api?.readFileAsBuffer) {
+    if (!window.api?.readFileInfo || !window.api?.readFileChunkBase64) {
         throw new Error('Local file reader is not available.');
     }
 
-    const fileInfo = await window.api.readFileAsBuffer(localPath);
+    const fileInfo = await window.api.readFileInfo(localPath);
     if (!fileInfo?.success) {
         throw new Error(`Failed to read local file '${localPath}': ${fileInfo?.error || 'Unknown error'}`);
     }
@@ -898,7 +1129,6 @@ async function resolveMappedValueArray(mapping, rowData, globalStore, apiCache, 
  */
 async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, apiCache, objectContext, executionLog = [], warnings = [], fieldName = '', systemSettings = {}) {
     const apiMatchThreshold = systemSettings.apiMatchThreshold !== undefined ? systemSettings.apiMatchThreshold : 0.9;
-    const apiCacheLimit = systemSettings.apiCacheLimit !== undefined ? systemSettings.apiCacheLimit : 50;
     const useApiCache = mapping.cacheApiResponse !== false;
 
     // Build URL / Body (same as main resolveMappedValue)
@@ -956,10 +1186,9 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
     const cacheKey = `${resolvedUrl}|${resolvedBody}`;
     let apiResultList = [];
 
-    if (useApiCache && apiCache.has(cacheKey)) {
-        apiResultList = apiCache.get(cacheKey);
-        apiCache.delete(cacheKey);
-        apiCache.set(cacheKey, apiResultList);
+    const cachedApiResult = useApiCache ? await readApiCache(apiCache, cacheKey) : undefined;
+    if (cachedApiResult !== undefined) {
+        apiResultList = cachedApiResult;
     } else {
         try {
             const fetchOptions = {
@@ -985,15 +1214,7 @@ async function resolveSingleApiItem(mapping, searchKey, rowData, globalStore, ap
             }
             apiResultList = await fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, mapping.responsePath);
             if (useApiCache && Array.isArray(apiResultList)) {
-                apiCache.set(cacheKey, apiResultList);
-                if (apiCache.size > apiCacheLimit) {
-                    const keysIter = apiCache.keys();
-                    const deleteCount = Math.max(1, Math.round(apiCacheLimit * 0.2));
-                    for (let i = 0; i < deleteCount; i++) {
-                        const nextKey = keysIter.next().value;
-                        if (nextKey !== undefined) apiCache.delete(nextKey);
-                    }
-                }
+                await writeApiCache(apiCache, cacheKey, apiResultList);
             }
         } catch (err) {
             console.error('Array Item Lookup API Error', err);
@@ -1057,7 +1278,6 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
     let finalText = '';
 
     const apiMatchThreshold = systemSettings.apiMatchThreshold !== undefined ? systemSettings.apiMatchThreshold : 0.9;
-    const apiCacheLimit = systemSettings.apiCacheLimit !== undefined ? systemSettings.apiCacheLimit : 50;
     const useApiCache = mapping?.cacheApiResponse !== false;
 
     if (!mapping) return { Value: null, Text: '' };
@@ -1214,27 +1434,15 @@ async function resolveMappedValue(mapping, rowData, globalStore, apiCache, objec
             cacheEnabled: useApiCache
         };
 
-        if (useApiCache && apiCache.has(cacheKey)) {
-            apiResultList = apiCache.get(cacheKey);
-            // Update LRU by re-inserting
-            apiCache.delete(cacheKey);
-            apiCache.set(cacheKey, apiResultList);
+        const cachedApiResult = useApiCache ? await readApiCache(apiCache, cacheKey) : undefined;
+        if (cachedApiResult !== undefined) {
+            apiResultList = cachedApiResult;
             apiLog.raw.response = { "message": "Loaded from cache", "cachedDataSize": apiResultList?.length };
         } else {
             try {
                 apiResultList = await fetchApiResultList(resolvedUrl, fetchOptions, resolvedBody, mapping.responsePath, apiLog);
                 if (useApiCache && Array.isArray(apiResultList)) {
-                    apiCache.set(cacheKey, apiResultList);
-
-                    // PREVENT MEMORY LEAK: Limit apiCache size with Map
-                    if (apiCache.size > apiCacheLimit) {
-                        const keysIter = apiCache.keys();
-                        const deleteCount = Math.max(1, Math.round(apiCacheLimit * 0.2)); // delete 20% of entries
-                        for (let i = 0; i < deleteCount; i++) {
-                            const nextKey = keysIter.next().value;
-                            if (nextKey !== undefined) apiCache.delete(nextKey);
-                        }
-                    }
+                    await writeApiCache(apiCache, cacheKey, apiResultList);
                 }
             } catch (err) {
                 console.error('Lookup API Error', err);
@@ -1324,21 +1532,18 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
     const warnings = [];
     let payload = null;
     let loginAsValue = null;
+    const transactionType = definitionData?.transactionType || globalStore.get('transactionType') || 'CreateFlow';
 
     // Extract System Settings with fallback defaults
     const apiMatchThreshold = definitionData?.apiMatchThreshold !== undefined 
         ? definitionData.apiMatchThreshold 
         : (globalStore?.get('apiMatchThreshold') !== undefined ? globalStore.get('apiMatchThreshold') : 0.9);
 
-    const apiCacheLimit = definitionData?.apiCacheLimit !== undefined 
-        ? definitionData.apiCacheLimit 
-        : (globalStore?.get('apiCacheLimit') !== undefined ? globalStore.get('apiCacheLimit') : 50);
-
     const relatedGridChunkSize = definitionData?.relatedGridChunkSize !== undefined 
         ? definitionData.relatedGridChunkSize 
         : (globalStore?.get('relatedGridChunkSize') !== undefined ? globalStore.get('relatedGridChunkSize') : 5);
 
-    const systemSettings = { apiMatchThreshold, apiCacheLimit, relatedGridChunkSize };
+    const systemSettings = { apiMatchThreshold, relatedGridChunkSize };
 
     try {
         executionLog.push({ key: `init_${Date.now()}_${Math.random()}`, step: 'Initialize', details: 'Row parsing started', status: 'Success' });
@@ -1455,7 +1660,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                         const pathCol = colDef.mapping?.pathCol;
                         if (pathCol) {
                             const filePathRaw = String(gridRow[pathCol] || '').trim();
-                            if (filePathRaw && window.api?.readFileAsBuffer) {
+                            if (filePathRaw && window.api?.readFileInfo) {
                                 let filePaths = [];
                                 try {
                                     const parsed = JSON.parse(filePathRaw);
@@ -1480,7 +1685,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                                 const resolvedItems = [];
                                 for (const filePath of filePaths) {
-                                    const fileResult = await window.api.readFileAsBuffer(filePath);
+                                    const fileResult = await window.api.readFileInfo(filePath);
                                     if (fileResult.success) {
                                         try {
                                             const { targetPath, category } = resolveRelatedDocumentTarget(colDef.mapping, gridRow, rowContext);
@@ -1493,7 +1698,12 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                                     category,
                                                     executionLog
                                                 )
-                                                : fileInfoToRelatedDocumentItem(fileResult, null, category);
+                                                : await fileInfoToRelatedDocumentItem(
+                                                    fileResult,
+                                                    null,
+                                                    category,
+                                                    transactionType === 'CreateFlow' && gridType === 'RelatedGrid'
+                                                );
                                             resolvedItems.push(descriptor);
                                         } catch (uploadErr) {
                                             const errMsg = `RelatedDocument '${colDef.name}': upload failed for "${filePath}" - ${uploadErr.message}`;
@@ -1524,8 +1734,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                         Items: resolvedItems
                                     });
                                 }
-                            } else if (filePathRaw && !window.api?.readFileAsBuffer) {
-                                const errMsg = `RelatedDocument '${colDef.name}': readFileAsBuffer API not available`;
+                            } else if (filePathRaw && !window.api?.readFileInfo) {
+                                const errMsg = `RelatedDocument '${colDef.name}': file reader API not available`;
                                 executionLog.push({
                                     key: `reldoc_api_err_${Date.now()}_${Math.random()}`,
                                     step: 'RelatedDocument Read',
@@ -1709,7 +1919,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     const pathCol = mapping.pathCol;
                     if (pathCol) {
                         const filePathRaw = String(getRowValue(rowData, pathCol) || '').trim();
-                        if (filePathRaw && window.api?.readFileAsBuffer) {
+                        if (filePathRaw && window.api?.readFileInfo) {
                             let filePaths = [];
                             try {
                                 const parsed = JSON.parse(filePathRaw);
@@ -1735,7 +1945,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                             const resolvedItems = [];
                             for (const filePath of filePaths) {
-                                const fileResult = await window.api.readFileAsBuffer(filePath);
+                                const fileResult = await window.api.readFileInfo(filePath);
                                 if (fileResult.success) {
                                     try {
                                         const { targetPath, category } = resolveRelatedDocumentTarget(mapping, rowData, objectContext);
@@ -1745,10 +1955,10 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                                 fileHeaders,
                                                 fileResult,
                                                 targetPath,
-                                                category,
-                                                executionLog
-                                            )
-                                            : fileInfoToRelatedDocumentItem(fileResult, null, category);
+                                            category,
+                                            executionLog
+                                        )
+                                            : await fileInfoToRelatedDocumentItem(fileResult, null, category);
                                         resolvedItems.push(descriptor);
                                     } catch (uploadErr) {
                                         const errMsg = `RelatedDocument '${def.name}': upload failed for "${filePath}" - ${uploadErr.message}`;
@@ -1779,8 +1989,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                     Items: resolvedItems
                                 };
                             }
-                        } else if (filePathRaw && !window.api?.readFileAsBuffer) {
-                            const errMsg = `RelatedDocument '${def.name}': readFileAsBuffer API not available`;
+                        } else if (filePathRaw && !window.api?.readFileInfo) {
+                            const errMsg = `RelatedDocument '${def.name}': file reader API not available`;
                             executionLog.push({
                                 key: `reldoc_api_err_${Date.now()}_${Math.random()}`,
                                 step: 'RelatedDocument Read',
@@ -1820,7 +2030,6 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         const resolvedFormParams = await resolveParameterDefinitions(definitionData.formParams, rowData, objectContext, 'Current');
 
         // 2. Construct Payload
-        const transactionType = globalStore.get('transactionType') || 'CreateFlow';
         const rawDocumentId = transactionType === 'EditForm'
             ? getRowValue(rowData, definitionData.documentIdColumn)
             : null;

@@ -12,6 +12,18 @@ const { Title, Text } = Typography;
 const { Option } = Select;
 const { Dragger } = Upload;
 const LOCAL_RECOVERY_SESSION_ID = '__local_recovery_file__';
+const getSourceFilePath = file => {
+    try {
+        return window.api?.getPathForFile?.(file) || file?.path || '';
+    } catch {
+        return file?.path || '';
+    }
+};
+const formatRecoverySessionSize = sizeBytes => {
+    if (!Number.isFinite(sizeBytes)) return 'Saved log';
+    if (sizeBytes < 1024 * 1024) return `${Math.max(1, Math.round(sizeBytes / 1024))} KB log`;
+    return `${(sizeBytes / (1024 * 1024)).toFixed(sizeBytes >= 100 * 1024 * 1024 ? 0 : 1)} MB log`;
+};
 
 const getLocalizedText = (textObj) => {
     if (!textObj) return '';
@@ -65,7 +77,8 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
         setSelectedRecoverySessionId(null);
         setUploadedRecoverySession(null);
         try {
-            const sessions = await logDB.listRecoverable();
+            const sessions = (await logDB.listRecoverable())
+                .filter(session => session.hasRecoveryContext);
             setRecoverableSessions(sessions);
             setSelectedRecoverySessionId(sessions[0]?.id || null);
         } catch (error) {
@@ -82,13 +95,13 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
             const recovered = sessionId === LOCAL_RECOVERY_SESSION_ID
                 ? uploadedRecoverySession
                 : await logDB.recover(sessionId);
-            if (!recovered?.results?.length) {
+            if (!recovered?.recoveryContext && !recovered?.results?.length) {
                 message.warning('No recoverable records were found in this session.');
                 return;
             }
 
             setRecoveryModalOpen(false);
-            onRestoreSession?.(recovered);
+            await onRestoreSession?.(recovered);
             message.success('Session restored. Opening the transfer screen...');
         } catch (error) {
             message.error(`The session could not be restored: ${error.message}`);
@@ -102,62 +115,27 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
         reader.onload = event => {
             const fileText = event.target.result;
             try {
-                let recovered;
-                try {
-                    const json = JSON.parse(fileText);
-                    if (!Array.isArray(json.results) || json.results.length === 0) {
-                        throw new Error("The selected JSON file does not contain a non-empty 'results' array.");
-                    }
-                    recovered = {
-                        ...json,
-                        recovered: true,
-                        recoverySource: file.name,
-                        sourceFile: file.name
-                    };
-                } catch (jsonError) {
-                    const latestRecords = new Map();
-                    let metadata = {};
-                    let invalidLineCount = 0;
-
-                    for (const line of fileText.split(/\r?\n/)) {
-                        if (!line.trim()) continue;
-                        try {
-                            const record = JSON.parse(line);
-                            if (record.recordType === 'transfer-metadata' && record.metadata && typeof record.metadata === 'object') {
-                                metadata = record.metadata;
-                            } else if (record.key !== undefined && record.key !== null) {
-                                latestRecords.set(String(record.key), record);
-                            } else {
-                                invalidLineCount += 1;
-                            }
-                        } catch {
-                            invalidLineCount += 1;
-                        }
-                    }
-
-                    if (latestRecords.size === 0) throw jsonError;
-                    recovered = {
-                        ...metadata,
-                        recovered: true,
-                        recoverySource: file.name,
-                        sourceFile: file.name,
-                        recoveryWarningCount: invalidLineCount,
-                        results: [...latestRecords.values()]
-                    };
+                const json = JSON.parse(fileText);
+                if (!json.recoveryContext?.definitionData) {
+                    throw new Error('The selected file is a log export, not a transfer checkpoint.');
                 }
+                const recovered = {
+                    ...json,
+                    results: Array.isArray(json.results) ? json.results : [],
+                    recovered: true,
+                    recoverySource: file.name,
+                    sourceFile: file.name
+                };
 
                 setUploadedRecoverySession(recovered);
                 setSelectedRecoverySessionId(LOCAL_RECOVERY_SESSION_ID);
-                const warning = recovered.recoveryWarningCount
-                    ? ` ${recovered.recoveryWarningCount} incomplete line(s) were skipped.`
-                    : '';
-                message.success(`${file.name} loaded with ${recovered.results.length} rows.${warning}`);
+                message.success(`${file.name} checkpoint loaded with ${recovered.results.length} processed rows.`);
             } catch (error) {
                 setUploadedRecoverySession(null);
-                message.error(`The log file could not be loaded: ${error.message}`);
+                message.error(`The checkpoint file could not be loaded: ${error.message}`);
             }
         };
-        reader.onerror = () => message.error('The selected log file could not be read.');
+        reader.onerror = () => message.error('The selected checkpoint file could not be read.');
         reader.readAsText(file);
         return false;
     };
@@ -406,11 +384,13 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
 
             try {
                 const { sheets, sheetColumns, fileContent } = await parseExcelFile(file);
+                const excelSourcePath = getSourceFilePath(file);
 
                 // Save to Store
                 globalStore.set('excelSheets', sheets);
                 globalStore.set('excelColumns', sheetColumns);
                 globalStore.set('excelContent', fileContent);
+                globalStore.set('excelSourcePath', excelSourcePath);
 
                 message.success(`Parsed ${sheets.length} sheets successfully`);
             } catch (err) {
@@ -427,6 +407,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
             globalStore.delete('excelSheets');
             globalStore.delete('excelColumns');
             globalStore.delete('excelContent');
+            globalStore.delete('excelSourcePath');
         },
     };
 
@@ -464,7 +445,9 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
         globalStore.set('formName', values.formName);
         globalStore.set('flowDocumentName', values.flowDocumentName);
         globalStore.set('startingEventCode', values.startingEventCode);
-        globalStore.set('transferFile', fileList[0].path); // Save file path here
+        const excelSourcePath = globalStore.get('excelSourcePath') ||
+            getSourceFilePath(fileList[0]);
+        globalStore.set('transferFile', excelSourcePath);
 
         // Simulate/Execute naming logic
         setTimeout(() => {
@@ -474,6 +457,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                 onFinish({
                     ...values,
                     fileName: fileList[0].name,
+                    excelSourcePath,
                     projectSecretKey: selectedProject?.secretKey
                 });
             }
@@ -939,7 +923,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                         disabled={!selectedRecoverySessionId}
                         onClick={() => restoreRecoverySession(selectedRecoverySessionId)}
                     >
-                        Restore selected session
+                        Restore selected checkpoint
                     </Button>
                 ]}
                 width={560}
@@ -953,10 +937,10 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                     </div>
                     <div>
                         <Title level={4} className="project-recovery-title">
-                            Recover a transfer session
+                            Recover a transfer checkpoint
                         </Title>
                         <Text type="secondary" className="project-recovery-description">
-                            Continue a previous transfer from its saved state.
+                            Reload the source Excel file and continue from the processed-row log.
                         </Text>
                     </div>
                 </div>
@@ -991,11 +975,15 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                                                 {session.label}
                                             </Text>
                                             {session.hasRecoveryContext && (
-                                                <Tag color="blue" bordered={false}>Saved state</Tag>
+                                                <Tag color="blue" bordered={false}>Checkpoint</Tag>
                                             )}
                                         </div>
                                         <Text type="secondary" className="project-recovery-item-meta">
-                                            {session.recordCount} rows · {new Date(session.modifiedAt).toLocaleString()}
+                                            {session.recordCountKnown
+                                                ? `${session.recordCount} rows`
+                                                : formatRecoverySessionSize(session.sizeBytes)}
+                                            {' · '}
+                                            {new Date(session.modifiedAt).toLocaleString()}
                                         </Text>
                                     </div>
                                     <CheckCircleFilled className="project-recovery-selection-icon" />
@@ -1017,7 +1005,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                                         <Tag color="cyan" bordered={false}>Local file</Tag>
                                     </div>
                                     <Text type="secondary" className="project-recovery-item-meta">
-                                        {uploadedRecoverySession.results.length} rows ready to restore
+                                        {uploadedRecoverySession.results.length} processed rows
                                     </Text>
                                 </div>
                                 <CheckCircleFilled className="project-recovery-selection-icon" />
@@ -1027,9 +1015,9 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                 </Spin>
 
                 <div className="project-recovery-upload-section">
-                    <Text className="project-recovery-upload-label">Or load a log file</Text>
+                    <Text className="project-recovery-upload-label">Or load an exported checkpoint</Text>
                     <Dragger
-                        accept=".json,.jsonl,application/json"
+                        accept=".json,application/json"
                         multiple={false}
                         beforeUpload={handleRecoveryFileUpload}
                         showUploadList={false}
@@ -1037,7 +1025,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                     >
                         <InboxOutlined className="project-recovery-upload-icon" />
                         <span className="project-recovery-upload-text">
-                            Drop a JSON or JSONL log here, or click to browse
+                            Drop a checkpoint JSON here, or click to browse
                         </span>
                     </Dragger>
                 </div>

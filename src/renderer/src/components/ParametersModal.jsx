@@ -433,37 +433,6 @@ export const ParametersModal = ({ visible, onCancel, onSave, initialValues, exce
                                                 </Form.Item>
                                             </div>
 
-                                            {/* LRU Cache Limit */}
-                                            <div style={{
-                                                background: '#fff',
-                                                borderRadius: '12px',
-                                                border: '1px solid #f1f5f9',
-                                                boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
-                                                padding: '16px 20px'
-                                            }}>
-                                                <div style={{ marginBottom: 12 }}>
-                                                    <Text strong style={{ fontSize: 14, color: '#1e293b' }}>API Cache Size Limit</Text>
-                                                    <Text type="secondary" style={{ display: 'block', fontSize: 11, marginTop: 2 }}>
-                                                        Maximum number of unique query results held in session memory.
-                                                    </Text>
-                                                </div>
-                                                <Form.Item
-                                                    name="apiCacheLimit"
-                                                    initialValue={50}
-                                                    style={{ marginBottom: 0 }}
-                                                >
-                                                    <Select
-                                                        style={{ width: '100%' }}
-                                                        options={[
-                                                            { label: '10 (Minimal Footprint Cache)', value: 10 },
-                                                            { label: '25 (Sleek Session Cache)', value: 25 },
-                                                            { label: '50 (Recommended Default)', value: 50 },
-                                                            { label: '100 (Extensive Cache)', value: 100 },
-                                                            { label: '200 (Heavy-load Cache)', value: 200 }
-                                                        ]}
-                                                    />
-                                                </Form.Item>
-                                            </div>
                                         </div>
                                     </div>
                                 )

@@ -239,11 +239,11 @@ export const LogViewer = ({ onBack, onRestoreSession }) => {
         setRecoveringSessionId(sessionId);
         try {
             const recovered = await logDB.recover(sessionId);
-            if (!recovered?.results?.length) {
+            if (!recovered?.recoveryContext && !recovered?.results?.length) {
                 message.warning('No recoverable records were found in this session.');
                 return;
             }
-            onRestoreSession?.(recovered);
+            await onRestoreSession?.(recovered);
             message.success('Session restored. Opening the transfer screen...');
         } catch (error) {
             message.error(`The session could not be restored: ${error.message}`);
@@ -521,7 +521,19 @@ export const LogViewer = ({ onBack, onRestoreSession }) => {
                                                             <div className="log-viewer-session-copy">
                                                                 <Text strong ellipsis style={{ display: 'block' }}>{session.label}</Text>
                                                                 <Text type="secondary" style={{ fontSize: 11 }}>
-                                                                    {session.recordCount} rows · {new Date(session.modifiedAt).toLocaleString()}
+                                                                    {session.recordCountKnown
+                                                                        ? `${session.recordCount} rows`
+                                                                        : `${Math.max(1, Math.round((session.sizeBytes || 0) / (1024 * 1024)))} MB log`}
+                                                                    {' · '}
+                                                                    {new Date(session.modifiedAt).toLocaleString()}
+                                                                    {session.hasRecoveryAssets
+                                                                        ? Number.isFinite(session.recoveryAssetRecordCount)
+                                                                            ? ` · ${session.recoveryAssetRecordCount} rows with preserved files`
+                                                                            : ' · preserved files available'
+                                                                        : ''}
+                                                                    {session.recoveryAssetsMissing
+                                                                        ? ' · recovery file store missing'
+                                                                        : ''}
                                                                 </Text>
                                                             </div>
                                                             <Space>

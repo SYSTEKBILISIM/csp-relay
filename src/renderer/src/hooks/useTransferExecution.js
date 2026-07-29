@@ -1,17 +1,22 @@
 import { useState, useRef, useEffect } from 'react';
 import { App } from 'antd';
 import { globalStore } from '../store/GlobalStore';
-import { processRowAndExecute, replayRecoveredTransferPayload } from '../services/TransferService';
+import { processRowAndExecute } from '../services/TransferService';
 import { logDB } from '../services/IndexedDBService';
+import { apiResponseCache } from '../services/ApiResponseCacheService';
 import { getJwtExpiry, renewSynergySessionAutomatically } from '../services/SessionService';
 import {
     TRANSFER_EXECUTION_SCOPE,
     isExecutableTransferStatus,
     isSpecialTransferScope
 } from '../utils/transferExecutionScope';
+import {
+    DEFAULT_PARALLEL_WORKER_COUNT,
+    getDispatchConcurrency,
+    normalizeParallelWorkerCount
+} from '../utils/executionConcurrency';
 
 const DEFAULT_WORK_UNITS = 1;
-const PARALLEL_ROW_LIMIT = 5;
 const SESSION_RENEWAL_LEAD_MS = 30 * 1000;
 
 const formatEstimatedSeconds = seconds => {
@@ -73,6 +78,9 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     const [estimatedFinishAt, setEstimatedFinishAt] = useState(null);
     const [executionMode, _setExecutionMode] = useState('sequential');
     const executionModeRef = useRef('sequential');
+    const [parallelWorkerCount, _setParallelWorkerCount] = useState(DEFAULT_PARALLEL_WORKER_COUNT);
+    const parallelWorkerCountRef = useRef(DEFAULT_PARALLEL_WORKER_COUNT);
+    const schedulerWakeRef = useRef(null);
     const [executionTiming, setExecutionTiming] = useState({
         startedAt: null,
         endedAt: null,
@@ -129,7 +137,9 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
     const isRunning = useRef(false);
     const isPausedRef = useRef(false);
-    const apiCache = useRef(new Map());
+    const apiCache = useRef(apiResponseCache);
+    const apiCacheActivationRef = useRef(Promise.resolve());
+    const activeApiCacheSessionIdRef = useRef(null);
     const allSheetsData = useRef({});
     // Explicit visual metrics for Retry operations
     const [retryState, setRetryState] = useState({ isRetrying: false, total: 0, processed: 0 });
@@ -164,6 +174,14 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     const setExecutionMode = (mode) => {
         executionModeRef.current = mode;
         _setExecutionMode(mode);
+        schedulerWakeRef.current?.();
+    };
+
+    const setParallelWorkerCount = value => {
+        const normalizedValue = normalizeParallelWorkerCount(value);
+        parallelWorkerCountRef.current = normalizedValue;
+        _setParallelWorkerCount(normalizedValue);
+        schedulerWakeRef.current?.();
     };
 
     // Performance Optimization for Huge Arrays (100k+ records)
@@ -237,10 +255,19 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             setExcelData(data);
 
             const recoveredResults = definitionData?.recoveredSession?.results;
-            if (Array.isArray(recoveredResults) && recoveredResults.length > 0) {
+            if (definitionData?.recoveredSession && Array.isArray(recoveredResults)) {
                 const recoveredByKey = new Map(recoveredResults.map((record, index) => {
                     const key = Number.isFinite(Number(record.key)) ? Number(record.key) : index;
-                    return [key, { ...record, key, id: record.id ?? key + 1 }];
+                    const wasInterrupted = record.status === 'Processing';
+                    return [key, {
+                        ...record,
+                        key,
+                        id: record.id ?? key + 1,
+                        status: wasInterrupted ? 'Pending' : record.status,
+                        message: wasInterrupted
+                            ? 'Interrupted while processing; ready to run again from the source file.'
+                            : record.message
+                    }];
                 }));
                 const rowKeys = data
                     .map((row, index) => row === undefined ? null : index)
@@ -254,8 +281,14 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                     duration: '-',
                     timestamp: '-'
                 });
+                const checkpointSelection = Array.isArray(definitionData?.recoveredSession?.selectedRowKeys)
+                    ? new Set(definitionData.recoveredSession.selectedRowKeys.map(Number))
+                    : null;
                 const executableKeys = recoveredLogs
-                    .filter(log => log.status === 'Pending' || log.status === 'Error' || log.status === 'ValidationError')
+                    .filter(log =>
+                        (!checkpointSelection || checkpointSelection.has(Number(log.key))) &&
+                        (log.status === 'Pending' || log.status === 'Error' || log.status === 'ValidationError')
+                    )
                     .map(log => log.key);
                 const success = recoveredLogs.filter(log => log.status === 'Success' || log.status === 'Warning').length;
                 const error = recoveredLogs.filter(log => log.status === 'Error' || log.status === 'ValidationError').length;
@@ -359,6 +392,18 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
     const resumeTransferWithFailures = (resumeSystem = true, resumeValidation = true) => {
         if (isPausedRef.current || isPaused) {
+            const failedKeys = logsStateRef.current
+                .filter(log =>
+                    (resumeSystem && log.status === 'Error') ||
+                    (resumeValidation && log.status === 'ValidationError')
+                )
+                .map(log => log.key);
+            const nextSelectedKeys = [...new Set([
+                ...selectedRowKeysRef.current,
+                ...failedKeys
+            ])];
+            selectedRowKeysRef.current = nextSelectedKeys;
+            _setSelectedRowKeys(nextSelectedKeys);
             startTransfer(TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS, {
                 resetSpecialAttempts: true,
                 failedTypes: {
@@ -400,6 +445,12 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setIsComplete(true);
         setIsStopped(stopped);
         updateRetryState({ isRetrying: false });
+        apiCacheActivationRef.current = Promise.resolve(apiCacheActivationRef.current)
+            .catch(() => undefined)
+            .then(() => apiCache.current.clearActive());
+        apiCacheActivationRef.current.catch(error => {
+            console.warn('[API Cache] Completed session cache could not be removed.', error);
+        });
         if (onStatusChange) onStatusChange(false);
     };
 
@@ -490,9 +541,15 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
         if (!isResuming) {
             const startedAt = Date.now();
+            if (logSessionInitializedRef.current && activeApiCacheSessionIdRef.current) {
+                apiCacheActivationRef.current = Promise.resolve(apiCacheActivationRef.current)
+                    .catch(() => undefined)
+                    .then(() => apiCache.current.activate(activeApiCacheSessionIdRef.current, true));
+                await apiCacheActivationRef.current;
+            }
             if (!logSessionInitializedRef.current) {
                 try {
-                    await logDB.clearAll({
+                    const logSession = await logDB.clearAll({
                         projectName: definitionData?.projectName || 'Unnamed Project',
                         transactionType: definitionData?.transactionType || 'N/A',
                         deployAgent: definitionData?.deployAgent || 'N/A',
@@ -503,8 +560,15 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                         mainIdColumn: definitionData?.mainIdColumn,
                         mainSheet: definitionData?.mainSheet,
                         fileName: definitionData?.fileName,
+                        totalRows: logsStateRef.current.length,
+                        recoveryMode: 'checkpoint',
                         transferStartedAt: new Date(startedAt).toLocaleString()
                     });
+                    activeApiCacheSessionIdRef.current = logSession.sessionId;
+                    apiCacheActivationRef.current = Promise.resolve(apiCacheActivationRef.current)
+                        .catch(() => undefined)
+                        .then(() => apiCache.current.activate(logSession.sessionId, false));
+                    await apiCacheActivationRef.current;
                     logSessionInitializedRef.current = true;
                     try {
                         await logDB.saveRecoveryContext({
@@ -513,9 +577,18 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                                 ...definitionData,
                                 recoveredSession: undefined
                             },
-                            excelContent: allSheetsData.current,
+                            excelSourcePath: definitionData?.excelSourcePath ||
+                                globalStore.get('excelSourcePath') ||
+                                globalStore.get('transferFile'),
                             selectedRowKeys: selectedRowKeysRef.current
                         });
+                        if (definitionData?.recoveredSession) {
+                            const completedCheckpointRows = logsStateRef.current
+                                .filter(log => log.status !== 'Pending' && log.status !== 'Processing');
+                            for (const checkpointRow of completedCheckpointRows) {
+                                await logDB.saveDetail(checkpointRow.key, {}, checkpointRow);
+                            }
+                        }
                     } catch (contextError) {
                         message.warning(`The recovery snapshot could not be saved; the transfer will continue: ${contextError.message}`);
                     }
@@ -539,7 +612,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             setExecutionTiming({ startedAt, endedAt: null, elapsedMs: 0 });
             setEstimatedTime(null);
             setEstimatedFinishAt(null);
-            apiCache.current = new Map();
+            await apiCacheActivationRef.current;
         } else {
             const resumedAt = Date.now();
             const timing = executionTimingRef.current;
@@ -576,10 +649,6 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         setIsPaused(false);
         isPausedRef.current = false;
 
-        const rowConcurrency = executionModeRef.current === 'parallel'
-            ? Math.min(PARALLEL_ROW_LIMIT, pendingRows.length)
-            : 1;
-
         let autoPauseReason = null;
         const requestAutoPauseForConnectivity = reason => {
             if (autoPauseReason) return;
@@ -599,7 +668,11 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             const avgWorkUnitsPerRow = estimation.workUnitsAccumulator / estimation.processedCount;
             const remainingRows = getRemainingRowCount(scope);
             const remainingWorkUnits = remainingRows * avgWorkUnitsPerRow;
-            const remainingMs = (avgMillisPerWorkUnit * remainingWorkUnits) / rowConcurrency;
+            const currentConcurrency = Math.min(
+                getDispatchConcurrency(executionModeRef.current, parallelWorkerCountRef.current),
+                Math.max(remainingRows, 1)
+            );
+            const remainingMs = (avgMillisPerWorkUnit * remainingWorkUnits) / currentConcurrency;
             const estSecs = remainingMs / 1000;
             estimation.remainingMs = remainingMs;
 
@@ -635,21 +708,6 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
             try {
                 const executeCurrentRow = async () => {
-                    if (definitionData?.replayRecoveredPayload) {
-                        const recoveredDetails = currentLog.details || (
-                            definitionData.recoveredSession?.id
-                                ? await logDB.getRecoveredDetail(
-                                    definitionData.recoveredSession.id,
-                                    currentLog.key
-                                )
-                                : null
-                        );
-                        return replayRecoveredTransferPayload(
-                            recoveredDetails?.payload,
-                            definitionData,
-                            globalStore
-                        );
-                    }
                     return processRowAndExecute(rowData, definitionData, globalStore, apiCache.current, allSheetsData.current);
                 };
                 const attemptedToken = globalStore.get('token');
@@ -747,24 +805,60 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
         syncGlobalStats();
 
-        if (rowConcurrency === 1) {
-            for (const currentLog of pendingRows) {
-                if (!isRunning.current) break;
-                await processLogEntry(currentLog);
-                await new Promise(resolve => setTimeout(resolve, 10));
-            }
-        } else {
+        await new Promise(resolve => {
             let nextRowIndex = 0;
-            const worker = async () => {
-                while (isRunning.current) {
-                    const currentIndex = nextRowIndex;
+            let activeWorkerCount = 0;
+            let settled = false;
+
+            const finishScheduler = () => {
+                if (settled) return;
+                settled = true;
+                schedulerWakeRef.current = null;
+                resolve();
+            };
+
+            const pumpScheduler = () => {
+                if (settled) return;
+
+                if (!isRunning.current) {
+                    if (activeWorkerCount === 0) finishScheduler();
+                    return;
+                }
+
+                const concurrency = getDispatchConcurrency(
+                    executionModeRef.current,
+                    parallelWorkerCountRef.current
+                );
+
+                while (
+                    isRunning.current &&
+                    activeWorkerCount < concurrency &&
+                    nextRowIndex < pendingRows.length
+                ) {
+                    const currentLog = pendingRows[nextRowIndex];
                     nextRowIndex += 1;
-                    if (currentIndex >= pendingRows.length) return;
-                    await processLogEntry(pendingRows[currentIndex]);
+                    activeWorkerCount += 1;
+
+                    Promise.resolve()
+                        .then(() => processLogEntry(currentLog))
+                        .catch(error => {
+                            console.error('Adaptive row scheduler error:', error);
+                            requestAutoPauseForConnectivity(error.message);
+                        })
+                        .finally(() => {
+                            activeWorkerCount -= 1;
+                            pumpScheduler();
+                        });
+                }
+
+                if (nextRowIndex >= pendingRows.length && activeWorkerCount === 0) {
+                    finishScheduler();
                 }
             };
-            await Promise.all(Array.from({ length: rowConcurrency }, () => worker()));
-        }
+
+            schedulerWakeRef.current = pumpScheduler;
+            pumpScheduler();
+        });
 
         refreshExecutionState(true);
         setLoading(false);
@@ -835,6 +929,10 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
     const resetTransfer = () => {
         logSessionInitializedRef.current = false;
+        activeApiCacheSessionIdRef.current = null;
+        apiCacheActivationRef.current = Promise.resolve(apiCacheActivationRef.current)
+            .catch(() => undefined)
+            .then(() => apiCache.current.clearActive());
         const resetLogs = logsStateRef.current.map(l => {
             return {
                 ...l,
@@ -912,6 +1010,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         estimatedFinishAt,
         executionMode,
         setExecutionMode,
+        parallelWorkerCount,
+        setParallelWorkerCount,
         executionTiming,
         isComplete,
         isStopped,

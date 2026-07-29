@@ -67,7 +67,8 @@
 }
 
 .project-recovery-modal .ant-modal-content {
-    padding: 30px 26px 24px;
+    overflow: hidden;
+    padding: 0;
     border-radius: 16px;
 }
 
@@ -76,18 +77,22 @@
     inset-inline-end: 20px;
 }
 
+.project-recovery-modal .ant-modal-body {
+    padding: 22px 24px 0;
+}
+
 .project-recovery-modal .ant-modal-footer {
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid #f1f5f9;
+    margin: 26px 24px 0;
+    padding: 0 0 20px;
+    border-top: 0;
 }
 
 .project-recovery-header {
     display: flex;
     align-items: center;
     gap: 14px;
-    padding-right: 28px;
-    margin-bottom: 22px;
+    padding-right: 32px;
+    margin-bottom: 18px;
 }
 
 .project-recovery-header-icon {
@@ -115,13 +120,13 @@
 .project-recovery-summary {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
     padding: 0 2px;
     font-size: 11px;
 }
 
 .project-recovery-list {
-    min-height: 110px;
+    min-height: 76px;
     max-height: 320px;
     padding: 2px;
     overflow-y: auto;
@@ -202,9 +207,9 @@
 }
 
 .project-recovery-upload-section {
-    margin-top: 18px;
-    padding-top: 16px;
-    border-top: 1px solid #f1f5f9;
+    margin-top: 14px;
+    padding-top: 0;
+    border-top: 0;
 }
 
 .project-recovery-upload-label {

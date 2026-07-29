@@ -1,5 +1,21 @@
 import { read, utils } from 'xlsx';
 
+const parseWorkbookData = data => {
+    const workbook = read(data, { type: 'array' });
+    const sheets = workbook.SheetNames;
+    const sheetColumns = {};
+    const fileContent = {};
+
+    sheets.forEach(sheetName => {
+        const worksheet = workbook.Sheets[sheetName];
+        const headers = utils.sheet_to_json(worksheet, { header: 1 })[0] || [];
+        sheetColumns[sheetName] = headers;
+        fileContent[sheetName] = utils.sheet_to_json(worksheet, { cellDates: true, defval: '' });
+    });
+
+    return { sheets, sheetColumns, fileContent };
+};
+
 /**
  * Parses an Excel file and returns sheets and content.
  * @param {File|Blob} file 
@@ -12,34 +28,7 @@ export const parseExcelFile = (file) => {
         reader.onload = (e) => {
             try {
                 const data = new Uint8Array(e.target.result);
-                const workbook = read(data, { type: 'array' });
-
-                const sheets = workbook.SheetNames;
-                const sheetColumns = {};
-                const fileContent = {};
-
-                sheets.forEach(sheetName => {
-                    const worksheet = workbook.Sheets[sheetName];
-
-                    // 1. Get headers (Row 1)
-                    const headers = utils.sheet_to_json(worksheet, { header: 1 })[0] || [];
-                    sheetColumns[sheetName] = headers;
-
-                    // 2. Get full content
-                    // cellDates: true -> Parsing 36683 as JS Date
-                    // defval: '' -> Empty cells as empty strings
-                    const rawData = utils.sheet_to_json(worksheet, { cellDates: true, defval: '' });
-
-                    // Store Raw Data (Dates are Objects)
-                    fileContent[sheetName] = rawData;
-                });
-
-                resolve({
-                    sheets,
-                    sheetColumns,
-                    fileContent
-                });
-
+                resolve(parseWorkbookData(data));
             } catch (err) {
                 reject(err);
             }
@@ -48,4 +37,15 @@ export const parseExcelFile = (file) => {
         reader.onerror = (err) => reject(err);
         reader.readAsArrayBuffer(file);
     });
+};
+
+export const parseExcelFilePath = async filePath => {
+    if (!window.api?.readFileBytes) {
+        throw new Error('Local Excel file reader is unavailable.');
+    }
+    const result = await window.api.readFileBytes(filePath);
+    if (!result?.success) {
+        throw new Error(result?.error || `Excel source could not be read: ${filePath}`);
+    }
+    return parseWorkbookData(new Uint8Array(result.data));
 };

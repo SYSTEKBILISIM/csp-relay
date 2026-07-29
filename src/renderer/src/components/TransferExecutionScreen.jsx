@@ -10,6 +10,7 @@ import { ResizableTitle } from './ResizableTitle';
 import { logDB } from '../services/IndexedDBService';
 import { renewSynergySession } from '../services/SessionService';
 import { globalStore } from '../store/GlobalStore';
+import { parseRowSelectionExpression } from '../utils/rowSelectionExpression';
 import '../assets/css/TransferExecutionScreen.css';
 
 // Robust Turkish-aware lowercasing with normalization
@@ -66,8 +67,8 @@ const HighlightText = ({ text, highlight, isFocused }) => {
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 
-const QUEUE_SELECTION_COLUMN_WIDTH = 28;
-const QUEUE_DRAG_COLUMN_WIDTH = 22;
+const QUEUE_SELECTION_COLUMN_WIDTH = 38;
+const QUEUE_DRAG_COLUMN_WIDTH = 36;
 
 const formatExecutionTime = timestamp => timestamp
     ? {
@@ -110,6 +111,12 @@ const ExecutionDateValue = ({ timestamp }) => {
     );
 };
 
+const TableHeader = ({ label }) => (
+    <Tooltip title={label} placement="topLeft">
+        <span className="table-header-sm">{label}</span>
+    </Tooltip>
+);
+
 
 export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChange }) => {
     const { message, modal } = App.useApp();
@@ -123,6 +130,8 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         estimatedFinishAt,
         executionMode,
         setExecutionMode,
+        parallelWorkerCount,
+        setParallelWorkerCount,
         executionTiming,
         isComplete,
         isStopped,
@@ -162,7 +171,12 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const [searchText, setSearchText] = useState('');
     const [debouncedSearchText, setDebouncedSearchText] = useState('');
     const [currentMatchIndex, setCurrentMatchIndex] = useState(-1);
+    const [quickSelectionOpen, setQuickSelectionOpen] = useState(false);
+    const [quickSelectionValue, setQuickSelectionValue] = useState('');
+    const [quickSelectionMode, setQuickSelectionMode] = useState('select');
+    const [quickSelectionError, setQuickSelectionError] = useState('');
     const searchInputRef = useRef(null);
+    const quickSelectionInputRef = useRef(null);
     const queueTableRef = useRef(null);
     const resultsTableRef = useRef(null);
     const selectionAnchorKeyRef = useRef(null);
@@ -177,10 +191,10 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     });
     const [queueColWidths, setQueueColWidths] = useState({
         dragHandle: QUEUE_DRAG_COLUMN_WIDTH,
-        id: 50,
+        id: 100,
         status: 140,
         mainId: 130,
-        rowData: 150
+        rowData: 44
     });
 
     const handleResultResize = key => (e, { size }) => {
@@ -191,7 +205,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         setQueueColWidths(prev => ({ ...prev, [key]: Math.max(size.width, 50) }));
     };
 
-    const nonResizableColumnKeys = new Set(['dragHandle']);
+    const nonResizableColumnKeys = new Set(['dragHandle', 'rowData']);
 
     // Debounce Search Text to prevent UI freeze on large datasets
     useEffect(() => {
@@ -323,7 +337,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 // Precision adjustment: subtract slightly more header/border height to prevent table bottom clipping
                 const height = tableContainerRef.current.clientHeight - 35;
                 setTableScrollY(height > 50 ? height : 400);
-                setTableViewportWidth(tableContainerRef.current.clientWidth - 5);
+                setTableViewportWidth(tableContainerRef.current.clientWidth - 2);
             }
         };
         const observer = new ResizeObserver(updateHeight);
@@ -537,7 +551,17 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         const totalWidth = entries.reduce((sum, [, width]) => sum + width, 0);
         const availableWidth = tableViewportWidth - extraWidth;
 
-        if (availableWidth <= 0 || totalWidth <= availableWidth) return widths;
+        if (availableWidth <= 0) return widths;
+        if (totalWidth <= availableWidth) {
+            const expandedWidths = { ...widths };
+            const flexibleKey = expandedWidths.message
+                ? 'message'
+                : expandedWidths.mainId
+                    ? 'mainId'
+                    : 'rowData';
+            expandedWidths[flexibleKey] += availableWidth - totalWidth;
+            return expandedWidths;
+        }
 
         const scale = availableWidth / totalWidth;
         const fittedWidths = Object.fromEntries(
@@ -571,7 +595,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
 
     const columns = [
         {
-            title: <span className="table-header-sm">#</span>,
+            title: <TableHeader label="#" />,
             key: 'id',
             dataIndex: 'id',
             sorter: (a, b) => a.id - b.id,
@@ -582,7 +606,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             )
         },
         {
-            title: <span className="table-header-sm">Status</span>,
+            title: <TableHeader label="Status" />,
             key: 'status',
             dataIndex: 'status',
             filters: [{ text: 'Success', value: 'Success' }, { text: 'Warning', value: 'Warning' }, { text: 'Error', value: 'Error' }, { text: 'Validation Error', value: 'ValidationError' }, { text: 'Processing', value: 'Processing' }],
@@ -601,7 +625,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             }
         },
         {
-            title: <span className="table-header-sm">{definitionData.mainIdColumn || 'ID'}</span>,
+            title: <TableHeader label={definitionData.mainIdColumn || 'ID'} />,
             key: 'mainId',
             render: (_, record) => {
                 const rowData = getRowData(record.key) || {};
@@ -615,7 +639,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             }
         },
         {
-            title: <span className="table-header-sm">Message</span>,
+            title: <TableHeader label="Message" />,
             key: 'message',
             dataIndex: 'message',
             sorter: (a, b) => a.message.localeCompare(b.message),
@@ -624,14 +648,14 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             render: (v, record) => <StableCell><TruncatedText text={v} highlight={debouncedSearchText} isFocused={matches.length > 0 && record.key === matches[currentMatchIndex]} /></StableCell>
         },
         {
-            title: <span className="table-header-sm">Timestamp</span>,
+            title: <TableHeader label="Timestamp" />,
             key: 'timestamp',
             dataIndex: 'timestamp',
             sorter: (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
             render: (text) => <StableCell style={{ fontSize: '11px', color: '#94a3b8' }}><TruncatedText text={text} /></StableCell>
         },
         {
-            title: <span className="table-header-sm">Duration</span>,
+            title: <TableHeader label="Duration" />,
             key: 'duration',
             dataIndex: 'duration',
             align: 'right',
@@ -639,7 +663,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             render: (text) => <StableCell style={{ justifyContent: 'flex-end', width: '100%' }}><TruncatedText text={text} /></StableCell>
         },
         {
-            title: <span className="table-header-sm">Details</span>,
+            title: <TableHeader label="Details" />,
             key: 'details',
             width: 70,
             align: 'center',
@@ -694,17 +718,19 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         },
         Table.SELECTION_COLUMN,
         {
-            title: <span className="table-header-sm">#</span>,
+            title: <TableHeader label="#" />,
             dataIndex: 'id',
             key: 'id',
+            align: 'left',
+            className: 'queue-id-column',
             render: (text, record) => (
-                <StableCell style={{ color: '#64748b', fontWeight: 600 }}>
+                <StableCell style={{ justifyContent: 'flex-start', color: '#64748b', fontWeight: 600 }}>
                     <TruncatedText text={text} highlight={debouncedSearchText} isFocused={matches.length > 0 && record.key === matches[currentMatchIndex]} />
                 </StableCell>
             )
         },
         {
-            title: <span className="table-header-sm">Status</span>,
+            title: <TableHeader label="Status" />,
             dataIndex: 'status',
             key: 'status',
             filters: [{ text: 'Success', value: 'Success' }, { text: 'Warning', value: 'Warning' }, { text: 'Error', value: 'Error' }, { text: 'Validation Error', value: 'ValidationError' }, { text: 'Pending', value: 'Pending' }, { text: 'Processing', value: 'Processing' }],
@@ -723,8 +749,9 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             }
         },
         {
-            title: <span className="table-header-sm">{definitionData.mainIdColumn || 'ID'}</span>,
+            title: <TableHeader label={definitionData.mainIdColumn || 'ID'} />,
             key: 'mainId',
+            className: 'queue-main-id-column',
             render: (_, record) => {
                 const rowData = getRowData(record.key) || {};
                 const idVal = getRowValue(rowData, definitionData.mainIdColumn);
@@ -737,9 +764,13 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             }
         },
         {
-            title: <span className="table-header-sm">Preview Data</span>,
+            title: '',
             dataIndex: 'rowData',
             key: 'rowData',
+            width: 44,
+            align: 'center',
+            className: 'queue-preview-column',
+            onHeaderCell: () => ({ className: 'queue-preview-column' }),
             render: (_, record) => {
                 const rowData = getRowData(record.key) || {};
                 const isDetailMatch = debouncedSearchText && Object.entries(rowData).some(([k, v]) =>
@@ -749,15 +780,16 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 const isFocused = matches.length > 0 && record.key === matches[currentMatchIndex];
 
                 return (
-                    <StableCell>
-                        <Button
-                            size="small"
-                            icon={<EyeOutlined />}
-                            onClick={(e) => { e.stopPropagation(); setPreviewData(rowData); setPreviewModalVisible(true); }}
-                            className={`show-data-btn ${isDetailMatch ? (isFocused ? 'match-focus' : 'match-active') : ''}`}
-                        >
-                            {isDetailMatch ? 'Show Match' : 'Show Data'}
-                        </Button>
+                    <StableCell style={{ justifyContent: 'center' }}>
+                        <Tooltip title={isDetailMatch ? 'Inspect matching data' : 'Inspect data'}>
+                            <Button
+                                size="small"
+                                icon={<EyeOutlined />}
+                                aria-label={isDetailMatch ? 'Inspect matching data' : 'Inspect data'}
+                                onClick={(e) => { e.stopPropagation(); setPreviewData(rowData); setPreviewModalVisible(true); }}
+                                className={`show-data-btn ${isDetailMatch ? (isFocused ? 'match-focus' : 'match-active') : ''}`}
+                            />
+                        </Tooltip>
                     </StableCell>
                 );
             }
@@ -823,16 +855,94 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         performJump(nextIdx);
     };
 
+    const openQuickSelection = React.useCallback(() => {
+        if (loading || isPaused) {
+            message.warning('Row selection is locked while transfer is active/paused.');
+            return;
+        }
+        if (logs.length === 0) {
+            message.info('There are no queue rows to select.');
+            return;
+        }
+
+        setActiveTab('queue');
+        setQuickSelectionError('');
+        setQuickSelectionOpen(true);
+    }, [isPaused, loading, logs.length, message]);
+
     useEffect(() => {
         const handleKeyDown = (e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            if (!(e.ctrlKey || e.metaKey)) return;
+
+            if (!e.altKey && (e.code === 'KeyF' || e.key?.toLowerCase() === 'f')) {
                 e.preventDefault();
                 searchInputRef.current?.focus();
+                return;
+            }
+
+            if (e.altKey && !e.shiftKey && (e.code === 'KeyS' || e.key?.toLowerCase() === 's')) {
+                e.preventDefault();
+                e.stopPropagation();
+                openQuickSelection();
             }
         };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, []);
+
+        // Capture phase keeps the shortcut available even when a focused editor/input
+        // stops the bubbling keyboard event. Electron IPC covers native interception.
+        window.addEventListener('keydown', handleKeyDown, true);
+        const removeNativeShortcut = window.api?.onQuickSelectionShortcut?.(openQuickSelection);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown, true);
+            removeNativeShortcut?.();
+        };
+    }, [openQuickSelection]);
+
+    const applyQuickSelection = () => {
+        let rowNumbers;
+        try {
+            const maximumRowNumber = logs.reduce(
+                (maximum, log) => Math.max(maximum, Number(log.id) || 0),
+                0
+            );
+            rowNumbers = parseRowSelectionExpression(quickSelectionValue, maximumRowNumber);
+        } catch (error) {
+            setQuickSelectionError(error.message);
+            return;
+        }
+
+        const requestedRowSet = new Set(rowNumbers);
+        const requestedLogs = logs
+            .filter(log => requestedRowSet.has(Number(log.id)));
+        const requestedKeys = requestedLogs
+            .filter(log => log?.status === 'Pending')
+            .map(log => log.key);
+        const lockedRowCount = requestedLogs.length - requestedKeys.length;
+        const nextSelectedKeys = new Set(selectedRowKeys);
+
+        requestedKeys.forEach(key => {
+            if (quickSelectionMode === 'select') {
+                nextSelectedKeys.add(key);
+            } else {
+                nextSelectedKeys.delete(key);
+            }
+        });
+
+        setSelectedRowKeys([...nextSelectedKeys]);
+        selectionAnchorKeyRef.current = requestedKeys.at(-1) ?? null;
+        setQuickSelectionOpen(false);
+        setQuickSelectionValue('');
+        setQuickSelectionError('');
+
+        const action = quickSelectionMode === 'select' ? 'selected' : 'removed from selection';
+        const skipped = lockedRowCount > 0 ? ` ${lockedRowCount} non-pending row(s) were skipped.` : '';
+        message.success(`${requestedKeys.length} row(s) ${action}.${skipped}`);
+
+        const firstRowIndex = logs.findIndex(log => Number(log.id) === rowNumbers[0]);
+        if (firstRowIndex >= 0 && queueTableRef.current) {
+            queueTableRef.current.scrollTo({ index: firstRowIndex, align: 'top' });
+        }
+    };
+
 
     const isLiveModeRef = useRef(true);
     const lastScrollHeightRef = useRef(0);
@@ -1009,31 +1119,37 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const isTransferActive = loading || retryState.isRetrying;
 
     return (
-        <Card variant="borderless" className="exec-container" styles={{ body: { padding: '16px', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 120px)' } }}>
+        <Card variant="borderless" className="exec-container" styles={{ body: { padding: '16px', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 92px)' } }}>
             <div className="exec-header">
                 <div className="exec-header-copy">
                     <div className="exec-title-row">
-                        {definitionData?.replayRecoveredPayload && (
+                        {definitionData?.recoveredSession && (
                             <Popover
                                 trigger={['hover', 'click']}
                                 placement="bottomLeft"
                                 mouseEnterDelay={0.12}
-                                title="Safe replay mode"
-                                classNames={{ root: 'legacy-replay-popover' }}
+                                title="Recovery checkpoint"
+                                classNames={{ root: 'recovery-checkpoint-popover' }}
                                 content={
-                                    <Text type="secondary" className="legacy-replay-info-text">
-                                        This legacy log does not contain a mapping snapshot. Only the preserved payloads
-                                        of selected Pending or Failed records will be replayed. Successful records are
-                                        not selected automatically.
-                                    </Text>
+                                    <div className="recovery-checkpoint-info">
+                                        <Text type="secondary">
+                                            This transfer was restored from a checkpoint. The Excel data was reloaded
+                                            from its source path; only row statuses and execution logs were recovered.
+                                        </Text>
+                                        {definitionData.recoveredSession.source && (
+                                            <Text className="recovery-checkpoint-source">
+                                                Source: {definitionData.recoveredSession.source}
+                                            </Text>
+                                        )}
+                                    </div>
                                 }
                             >
                                 <Button
                                     type="text"
                                     size="small"
                                     icon={<InfoCircleOutlined />}
-                                    className="legacy-replay-info-button"
-                                    aria-label="Safe replay mode information"
+                                    className="recovery-checkpoint-info-button"
+                                    aria-label="Recovery checkpoint information"
                                 />
                             </Popover>
                         )}
@@ -1046,22 +1162,54 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     </Text>
                 </div>
                 <div className="exec-header-actions">
-                    <Segmented
-                        className="execution-mode-header"
-                        value={executionMode}
-                        onChange={setExecutionMode}
-                        disabled={loading && !isPausing && !isStopping}
-                        options={[
-                            {
-                                value: 'sequential',
-                                label: <Tooltip title="Synchronous: Processes Excel rows one by one in their queue order"><OrderedListOutlined /></Tooltip>
-                            },
-                            {
-                                value: 'parallel',
-                                label: <Tooltip title="Asynchronous: Processes up to 5 independent rows at the same time"><ThunderboltOutlined /></Tooltip>
-                            }
-                        ]}
-                    />
+                    <div className={`execution-control-group${executionMode === 'parallel' ? ' is-parallel' : ''}`}>
+                        <Segmented
+                            className="execution-mode-header"
+                            value={executionMode}
+                            onChange={setExecutionMode}
+                            disabled={isPausing || isStopping}
+                            options={[
+                                {
+                                    value: 'sequential',
+                                    label: (
+                                        <Tooltip
+                                            placement="bottomRight"
+                                            title="Synchronous: Processes Excel rows one by one in their queue order"
+                                        >
+                                            <OrderedListOutlined />
+                                        </Tooltip>
+                                    )
+                                },
+                                {
+                                    value: 'parallel',
+                                    label: (
+                                        <Tooltip
+                                            placement="bottomRight"
+                                            title={`Asynchronous: Processes up to ${parallelWorkerCount} independent rows at the same time`}
+                                        >
+                                            <ThunderboltOutlined />
+                                        </Tooltip>
+                                    )
+                                }
+                            ]}
+                        />
+                        <div className="parallel-worker-control">
+                            <span>Workers</span>
+                            <Select
+                                aria-label="Parallel worker count"
+                                value={parallelWorkerCount}
+                                onChange={setParallelWorkerCount}
+                                disabled={isPausing || isStopping}
+                                options={Array.from({ length: 10 }, (_, index) => ({
+                                    value: index + 1,
+                                    label: String(index + 1)
+                                }))}
+                                variant="borderless"
+                                popupMatchSelectWidth={false}
+                                placement="bottomRight"
+                            />
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -1265,6 +1413,19 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 />
 
                 <Space>
+                    {activeTab === 'queue' && (
+                        <Tooltip title="Quick row selection (Ctrl + Alt + S)">
+                            <Button
+                                className="quick-selection-trigger"
+                                icon={<OrderedListOutlined />}
+                                disabled={loading || isPaused || logs.length === 0}
+                                onClick={openQuickSelection}
+                            >
+                                Quick Select
+                                <span className="quick-selection-shortcut">Ctrl Alt S</span>
+                            </Button>
+                        </Tooltip>
+                    )}
                     {searchText && matches.length > 0 && (
                         <div style={{ fontSize: '12px', color: '#64748b', fontWeight: 600, marginRight: 8 }}>
                             {currentMatchIndex + 1} / {matches.length}
@@ -1349,6 +1510,69 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     )}
                 </div>
             </div>
+            <Modal
+                className="quick-selection-modal"
+                open={quickSelectionOpen}
+                centered
+                width={460}
+                title={
+                    <div className="quick-selection-title">
+                        <span className="quick-selection-title-icon"><OrderedListOutlined /></span>
+                        <span>
+                            <strong>Quick Selection</strong>
+                            <small>Select queue rows by the numbers in the # column</small>
+                        </span>
+                    </div>
+                }
+                okText={quickSelectionMode === 'select' ? 'Add to Selection' : 'Remove from Selection'}
+                okButtonProps={{ danger: quickSelectionMode === 'remove' }}
+                cancelText="Cancel"
+                onOk={applyQuickSelection}
+                onCancel={() => {
+                    setQuickSelectionOpen(false);
+                    setQuickSelectionError('');
+                }}
+                afterOpenChange={(open) => {
+                    if (open) {
+                        setTimeout(() => quickSelectionInputRef.current?.focus(), 0);
+                    }
+                }}
+            >
+                <div className="quick-selection-content">
+                    <Segmented
+                        block
+                        value={quickSelectionMode}
+                        onChange={setQuickSelectionMode}
+                        options={[
+                            { label: 'Select Rows', value: 'select' },
+                            { label: 'Remove Rows', value: 'remove' }
+                        ]}
+                    />
+                    <div className="quick-selection-field">
+                        <label htmlFor="quick-selection-expression">Rows</label>
+                        <Input
+                            id="quick-selection-expression"
+                            ref={quickSelectionInputRef}
+                            size="large"
+                            value={quickSelectionValue}
+                            status={quickSelectionError ? 'error' : undefined}
+                            placeholder="1-10 or 1,3,4,7-12"
+                            onChange={(event) => {
+                                setQuickSelectionValue(event.target.value);
+                                if (quickSelectionError) setQuickSelectionError('');
+                            }}
+                            onPressEnter={applyQuickSelection}
+                        />
+                        {quickSelectionError
+                            ? <div className="quick-selection-error">{quickSelectionError}</div>
+                            : <div className="quick-selection-help">Use commas to combine individual rows and ranges. Only Pending rows can change.</div>}
+                    </div>
+                    <div className="quick-selection-summary">
+                        <span>{logs.length} queue rows</span>
+                        <span>{selectedRowKeys.length} currently selected</span>
+                    </div>
+                </div>
+            </Modal>
             <LogDetailsModal
                 visible={modalVisible}
                 onCancel={() => setModalVisible(false)}

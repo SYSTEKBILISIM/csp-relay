@@ -1,8 +1,8 @@
 import { createReadStream, createWriteStream } from 'fs'
-import { appendFile, mkdir, open, readFile, readdir, stat, writeFile } from 'fs/promises'
+import { appendFile, mkdir, open, readFile, readdir, rm, stat, writeFile } from 'fs/promises'
 import { randomUUID } from 'crypto'
 import { createInterface } from 'readline'
-import { basename, dirname, join } from 'path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'path'
 import { optimizeLogValue } from '../shared/logValueOptimizer'
 
 export { optimizeLogValue } from '../shared/logValueOptimizer'
@@ -11,26 +11,50 @@ const LEGACY_ACTIVE_FILE_NAME = 'active-transfer-log.jsonl'
 const LEGACY_PREVIOUS_FILE_NAME = 'last-transfer-log.jsonl'
 const SESSION_FILE_PREFIX = 'active-transfer-log_'
 const RECOVERY_CONTEXT_SUFFIX = '.context.json'
+const RECOVERY_ASSET_SUFFIX = '.recovery'
 const RECOVERY_SECRET_KEYS = new Set(['password', 'token', 'encrypteddata', 'authorization'])
+const RECOVERY_SOURCE_DATA_KEYS = new Set([
+    'excelcontent',
+    'filecontent',
+    'allsheetsdata',
+    'sheetcolumns',
+    'excelcolumns',
+    'sheets'
+])
 
 const getRecoveryContextPath = filePath => filePath.replace(/\.jsonl$/i, RECOVERY_CONTEXT_SUFFIX)
+const getRecoveryAssetDirectory = filePath => filePath.replace(/\.jsonl$/i, RECOVERY_ASSET_SUFFIX)
 
-const optimizeSheetRows = sheets => Object.fromEntries(
-    Object.entries(sheets || {}).map(([sheetName, rows]) => [
-        sheetName,
-        Array.isArray(rows) ? rows.map(row => optimizeLogValue(row)) : []
-    ])
-)
+const pathIsType = async (filePath, type) => {
+    try {
+        const fileStats = await stat(filePath)
+        return type === 'directory' ? fileStats.isDirectory() : fileStats.isFile()
+    } catch {
+        return false
+    }
+}
+
+const resolveRecoveryAssetPath = (filePath, relativePath) => {
+    const root = resolve(getRecoveryAssetDirectory(filePath))
+    const target = resolve(root, String(relativePath || ''))
+    const pathFromRoot = relative(root, target)
+    if (!pathFromRoot || pathFromRoot.startsWith('..') || isAbsolute(pathFromRoot)) {
+        throw new Error('Invalid recovery binary reference.')
+    }
+    return target
+}
 
 const optimizeDefinition = definition => Object.fromEntries(
-    Object.entries(definition || {}).map(([key, value]) => [
-        key,
-        RECOVERY_SECRET_KEYS.has(String(key).toLowerCase())
-            ? '[REDACTED]'
-            : Array.isArray(value)
-            ? value.map(item => optimizeLogValue(item))
-            : optimizeLogValue(value, key, definition)
-    ])
+    Object.entries(definition || {})
+        .filter(([key]) => !RECOVERY_SOURCE_DATA_KEYS.has(String(key).toLowerCase()))
+        .map(([key, value]) => [
+            key,
+            RECOVERY_SECRET_KEYS.has(String(key).toLowerCase())
+                ? '[REDACTED]'
+                : Array.isArray(value)
+                ? value.map(item => optimizeLogValue(item))
+                : optimizeLogValue(value, key, definition)
+        ])
 )
 
 const sanitizeFilePart = (value, fallback) => {
@@ -62,6 +86,7 @@ export class TransferLogStore {
         this.byteOffset = 0
         this.writeQueue = Promise.resolve()
         this.scanCache = new Map()
+        this.recoveryAssetBatches = new Map()
     }
 
     async ensureDirectory(fallbackDirectory) {
@@ -76,9 +101,18 @@ export class TransferLogStore {
             const probe = await open(join(this.directory, 'active-transfer-log.jsonl'), 'a')
             await probe.close()
         }
+        const legacyEntries = await readdir(this.directory, { withFileTypes: true })
+        await Promise.all(legacyEntries
+            .filter(entry => entry.isDirectory() && entry.name.endsWith(RECOVERY_ASSET_SUFFIX))
+            .map(entry => rm(join(this.directory, entry.name), { recursive: true, force: true })))
         this.filePath = join(this.directory, LEGACY_ACTIVE_FILE_NAME)
         const scan = await this.scanFile(this.filePath)
         this.index = new Map([...scan.records].map(([key, value]) => [key, value.location]))
+        this.recoveryAssetBatches = new Map(
+            [...scan.records]
+                .filter(([, value]) => value.record.recoveryAssets?.batchId)
+                .map(([key, value]) => [key, value.record.recoveryAssets.batchId])
+        )
         this.byteOffset = scan.size
         return this.filePath
     }
@@ -106,6 +140,7 @@ export class TransferLogStore {
             await writeFile(this.filePath, metadataLine, 'utf8')
             this.scanCache.delete(this.filePath)
             this.index.clear()
+            this.recoveryAssetBatches.clear()
             this.byteOffset = Buffer.byteLength(metadataLine)
         })
         return this.writeQueue.then(() => ({
@@ -122,7 +157,9 @@ export class TransferLogStore {
                 savedAt: new Date().toISOString(),
                 mainUrl: typeof context.mainUrl === 'string' ? context.mainUrl : undefined,
                 definitionData: optimizeDefinition(context.definitionData),
-                excelContent: optimizeSheetRows(context.excelContent),
+                excelSourcePath: typeof context.excelSourcePath === 'string'
+                    ? context.excelSourcePath
+                    : undefined,
                 selectedRowKeys: Array.isArray(context.selectedRowKeys)
                     ? context.selectedRowKeys
                     : []
@@ -145,6 +182,25 @@ export class TransferLogStore {
             return JSON.parse(await readFile(getRecoveryContextPath(filePath), 'utf8'))
         } catch {
             return null
+        }
+    }
+
+    async readMetadataHeader(filePath) {
+        let handle
+        try {
+            handle = await open(filePath, 'r')
+            const buffer = Buffer.alloc(64 * 1024)
+            const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+            const firstLine = buffer.subarray(0, bytesRead).toString('utf8').split(/\r?\n/, 1)[0]
+            if (!firstLine) return {}
+            const record = JSON.parse(firstLine)
+            return record.recordType === 'transfer-metadata' && record.metadata && typeof record.metadata === 'object'
+                ? record.metadata
+                : {}
+        } catch {
+            return {}
+        } finally {
+            await handle?.close()
         }
     }
 
@@ -225,35 +281,64 @@ export class TransferLogStore {
                 id: entry.name,
                 filePath: join(this.directory, entry.name)
             }))
-        const sessions = []
+        const sessions = await Promise.all(candidates.map(async candidate => {
+            const fileStats = await stat(candidate.filePath)
+            if (fileStats.size === 0) return null
 
-        for (const candidate of candidates) {
-            const scan = await this.scanFile(candidate.filePath)
-            if (scan.records.size === 0) continue
-            const recoveryContext = await this.readContext(candidate.filePath)
-            const targetName = scan.metadata.flowName || scan.metadata.formName
-            const targetType = scan.metadata.flowName ? 'Flow' : scan.metadata.formName ? 'Form' : scan.metadata.transactionType
+            const cachedScan = this.scanCache.get(candidate.filePath)?.scan
+            const isCurrentSession = candidate.filePath === this.filePath
+            const metadata = cachedScan?.metadata || await this.readMetadataHeader(candidate.filePath)
+            const metadataRowCount = Number(metadata.totalRows)
+            const recordCount = cachedScan?.records.size ??
+                (isCurrentSession
+                    ? this.index.size
+                    : Number.isFinite(metadataRowCount) && metadataRowCount >= 0
+                        ? metadataRowCount
+                        : null)
+            const recoveryAssetDirectoryAvailable = await pathIsType(
+                getRecoveryAssetDirectory(candidate.filePath),
+                'directory'
+            )
+            const hasRecoveryContext = await pathIsType(getRecoveryContextPath(candidate.filePath), 'file')
+            const recoveryAssetRecordCount = cachedScan
+                ? [...cachedScan.records.values()]
+                    .filter(value => value.record.recoveryAssets?.fileCount > 0)
+                    .length
+                : isCurrentSession
+                    ? this.recoveryAssetBatches.size
+                    : null
+            const targetName = metadata.flowName || metadata.formName
+            const targetType = metadata.flowName ? 'Flow' : metadata.formName ? 'Form' : metadata.transactionType
             const labelParts = [
-                scan.metadata.projectName,
+                metadata.projectName,
                 targetName ? `${targetType}: ${targetName}` : targetType
             ].filter(Boolean)
-            sessions.push({
+            return {
                 id: candidate.id,
                 label: labelParts.join(' · ') || candidate.id,
-                recordCount: scan.records.size,
-                modifiedAt: scan.modifiedAt,
-                invalidLineCount: scan.invalidLineCount,
+                recordCount,
+                recordCountKnown: Number.isFinite(recordCount),
+                sizeBytes: fileStats.size,
+                modifiedAt: fileStats.mtime.toISOString(),
+                invalidLineCount: cachedScan?.invalidLineCount ?? null,
                 filePath: candidate.filePath,
-                projectName: scan.metadata.projectName,
-                transactionType: scan.metadata.transactionType,
-                flowName: scan.metadata.flowName,
-                formName: scan.metadata.formName,
-                logFileName: scan.metadata.logFileName || candidate.id,
-                hasRecoveryContext: Boolean(recoveryContext)
-            })
-        }
+                projectName: metadata.projectName,
+                transactionType: metadata.transactionType,
+                flowName: metadata.flowName,
+                formName: metadata.formName,
+                logFileName: metadata.logFileName || candidate.id,
+                hasRecoveryContext,
+                hasRecoveryAssets: recoveryAssetDirectoryAvailable,
+                recoveryAssetsMissing: Number.isFinite(recoveryAssetRecordCount) &&
+                    recoveryAssetRecordCount > 0 &&
+                    !recoveryAssetDirectoryAvailable,
+                recoveryAssetRecordCount
+            }
+        }))
 
-        return sessions.sort((a, b) => new Date(b.modifiedAt) - new Date(a.modifiedAt))
+        return sessions
+            .filter(Boolean)
+            .sort((a, b) => new Date(b.modifiedAt) - new Date(a.modifiedAt))
     }
 
     async recover(sessionId = 'latest') {
@@ -289,13 +374,35 @@ export class TransferLogStore {
 
     append(key, data) {
         this.writeQueue = this.writeQueue.then(async () => {
-            const record = optimizeLogValue({ key, ...data })
+            const {
+                rowData: _rowData,
+                recoveryAssets: _recoveryAssets,
+                ...dataWithoutSources
+            } = data || {}
+            const sourceDetails = dataWithoutSources.details || {}
+            const checkpointDetails = {
+                warnings: Array.isArray(sourceDetails.warnings) ? sourceDetails.warnings : [],
+                executionLog: (sourceDetails.executionLog || []).map(step => ({
+                    key: step?.key,
+                    step: step?.step,
+                    details: step?.details,
+                    status: step?.status
+                }))
+            }
+            const recordInput = {
+                key,
+                ...dataWithoutSources,
+                details: checkpointDetails
+            }
+
+            const record = optimizeLogValue(recordInput)
             const line = `${JSON.stringify(record)}\n`
             const length = Buffer.byteLength(line)
             const offset = this.byteOffset
             await appendFile(this.filePath, line, 'utf8')
             this.scanCache.delete(this.filePath)
             this.index.set(String(key), { offset, length })
+            this.recoveryAssetBatches.delete(String(key))
             this.byteOffset += length
         })
         return this.writeQueue.then(() => ({ success: true }))
@@ -338,10 +445,77 @@ export class TransferLogStore {
         }
     }
 
+    async getRecoveredReplayPayload(sessionId, key) {
+        await this.writeQueue
+        const sessions = await this.listRecoverable()
+        const selected = sessions.find(session => session.id === sessionId)
+        if (!selected) return null
+
+        const scan = await this.scanFile(selected.filePath)
+        const location = scan.records.get(String(key))?.location
+        if (!location) return null
+
+        const handle = await open(selected.filePath, 'r')
+        try {
+            const buffer = Buffer.alloc(location.length)
+            await handle.read(buffer, 0, location.length, location.offset)
+            const record = JSON.parse(buffer.toString('utf8').trim())
+            const payload = record.details?.payload
+            if (!payload) return null
+            return payload
+        } finally {
+            await handle.close()
+        }
+    }
+
+    async readRecoveryBinaryChunk(sessionId, relativePath, byteOffset = 0, byteLength = 1.5 * 1024 * 1024) {
+        await this.writeQueue
+        const normalizedSessionId = basename(String(sessionId || ''))
+        if (!normalizedSessionId || normalizedSessionId !== String(sessionId || '')) {
+            throw new Error('Invalid recovery session identifier.')
+        }
+
+        const sessionFilePath = join(this.directory, normalizedSessionId)
+        const binaryPath = resolveRecoveryAssetPath(sessionFilePath, relativePath)
+        const fileStats = await stat(binaryPath)
+        const safeOffset = Math.max(0, Number(byteOffset) || 0)
+        const safeLength = Math.min(
+            1.5 * 1024 * 1024,
+            Math.max(1, Number(byteLength) || 1.5 * 1024 * 1024),
+            Math.max(0, fileStats.size - safeOffset)
+        )
+        if (safeLength === 0) {
+            return {
+                data: '',
+                byteOffset: safeOffset,
+                nextByteOffset: safeOffset,
+                totalBytes: fileStats.size,
+                done: true
+            }
+        }
+
+        const handle = await open(binaryPath, 'r')
+        try {
+            const buffer = Buffer.alloc(safeLength)
+            const { bytesRead } = await handle.read(buffer, 0, safeLength, safeOffset)
+            const nextByteOffset = safeOffset + bytesRead
+            return {
+                data: buffer.subarray(0, bytesRead).toString('base64'),
+                byteOffset: safeOffset,
+                nextByteOffset,
+                totalBytes: fileStats.size,
+                done: nextByteOffset >= fileStats.size
+            }
+        } finally {
+            await handle.close()
+        }
+    }
+
     async exportJson(destinationPath, metadata = {}) {
         await this.writeQueue
         await mkdir(dirname(destinationPath), { recursive: true })
         const scan = await this.scanFile(this.filePath)
+        const recoveryContext = await this.readContext(this.filePath)
 
         const output = createWriteStream(destinationPath, { encoding: 'utf8' })
         const writeChunk = chunk => {
@@ -363,6 +537,7 @@ export class TransferLogStore {
         await writeChunk(`${JSON.stringify({
             ...scan.metadata,
             ...optimizeLogValue(metadata),
+            recoveryContext: recoveryContext || undefined,
             exportDate: new Date().toLocaleString()
         }).slice(0, -1)},\n\"results\":[`)
 

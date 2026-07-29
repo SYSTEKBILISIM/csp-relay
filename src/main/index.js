@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker, dialog, crashReporter } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, powerSaveBlocker, dialog, crashReporter, session } from 'electron'
 import { dirname, join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { appendFile, mkdir } from 'fs/promises'
@@ -13,6 +13,8 @@ import { readFileSync } from 'fs'
 import { basename, extname } from 'path'
 import mime from 'mime-types'; // Added dynamic MIME type lookup
 import { TransferLogStore } from './transferLogStore'
+import { ApiResponseCacheStore } from './apiResponseCacheStore'
+import { getLocalFileInfo, readLocalFileChunkBase64 } from './localFileReader'
 
 import icon from '../../resources/icon.png?asset'
 
@@ -61,6 +63,19 @@ function createWindow() {
     mainWindow.webContents.setWindowOpenHandler((details) => {
         shell.openExternal(details.url)
         return { action: 'deny' }
+    })
+
+    mainWindow.webContents.on('before-input-event', (event, input) => {
+        const isQuickSelectionShortcut = input.type === 'keyDown' &&
+            input.control &&
+            input.alt &&
+            !input.shift &&
+            (input.code === 'KeyS' || String(input.key || '').toLowerCase() === 's')
+
+        if (isQuickSelectionShortcut) {
+            event.preventDefault()
+            mainWindow.webContents.send('shortcut:quick-selection')
+        }
     })
 
     mainWindow.webContents.on('render-process-gone', (_event, details) => {
@@ -112,11 +127,12 @@ function createWindow() {
 // Global Store in Main Process
 const globalBackendStore = {};
 const transferLogStore = new TransferLogStore(is.dev ? app.getAppPath() : dirname(app.getPath('exe')))
+const apiResponseCacheStore = new ApiResponseCacheStore()
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
     writeRuntimeEvent('app-ready', {
         appVersion: app.getVersion(),
         electronVersion: process.versions.electron,
@@ -128,6 +144,10 @@ app.whenReady().then(() => {
 
     const transferLogReady = transferLogStore.ensureDirectory(app.getPath('userData')).catch(error => {
         console.error('[Main] Transfer log directory could not be initialized:', error)
+        throw error
+    })
+    const apiResponseCacheReady = apiResponseCacheStore.ensureDirectory(app.getPath('userData')).catch(error => {
+        console.error('[Main] API response cache directory could not be initialized:', error)
         throw error
     })
 
@@ -150,6 +170,19 @@ app.whenReady().then(() => {
     ipcMain.handle('transfer-log:get-recovered-detail', async (_event, { sessionId, key }) => {
         await transferLogReady
         return transferLogStore.getRecoveredDetail(sessionId, key)
+    })
+    ipcMain.handle('transfer-log:get-recovered-replay-payload', async (_event, { sessionId, key }) => {
+        await transferLogReady
+        return transferLogStore.getRecoveredReplayPayload(sessionId, key)
+    })
+    ipcMain.handle('transfer-log:read-recovery-binary-chunk', async (_event, {
+        sessionId,
+        relativePath,
+        byteOffset,
+        byteLength
+    }) => {
+        await transferLogReady
+        return transferLogStore.readRecoveryBinaryChunk(sessionId, relativePath, byteOffset, byteLength)
     })
     ipcMain.handle('transfer-log:path', async () => {
         await transferLogReady
@@ -182,6 +215,26 @@ app.whenReady().then(() => {
         })
         if (result.canceled || !result.filePath) return { success: false, canceled: true }
         return transferLogStore.exportDataJson(result.filePath, data)
+    })
+    ipcMain.handle('api-cache:activate', async (_event, { sessionId, preserveExisting = true }) => {
+        await apiResponseCacheReady
+        return apiResponseCacheStore.activateSession(sessionId, preserveExisting)
+    })
+    ipcMain.handle('api-cache:get', async (_event, key) => {
+        await apiResponseCacheReady
+        return apiResponseCacheStore.get(key)
+    })
+    ipcMain.handle('api-cache:set', async (_event, { key, json }) => {
+        await apiResponseCacheReady
+        return apiResponseCacheStore.set(key, json)
+    })
+    ipcMain.handle('api-cache:stats', async () => {
+        await apiResponseCacheReady
+        return apiResponseCacheStore.getStats()
+    })
+    ipcMain.handle('api-cache:clear-active', async () => {
+        await apiResponseCacheReady
+        return apiResponseCacheStore.clearActiveSession()
     })
 
     // Set app user model id for windows
@@ -230,6 +283,50 @@ app.whenReady().then(() => {
             return { success: false, error: err.message };
         }
     });
+    ipcMain.handle('read-file-info', async (_event, filePath) => {
+        try {
+            return {
+                success: true,
+                ...await getLocalFileInfo(filePath)
+            }
+        } catch (err) {
+            return { success: false, error: err.message }
+        }
+    })
+    ipcMain.handle('read-file-bytes', async (_event, filePath) => {
+        try {
+            return {
+                success: true,
+                data: readFileSync(filePath)
+            }
+        } catch (err) {
+            return { success: false, error: err.message }
+        }
+    })
+    ipcMain.handle('select-excel-file', async () => {
+        const result = await dialog.showOpenDialog({
+            title: 'Select the Excel source file for recovery',
+            properties: ['openFile'],
+            filters: [{ name: 'Excel Files', extensions: ['xlsx', 'xls'] }]
+        })
+        if (result.canceled || result.filePaths.length === 0) {
+            return { success: false, canceled: true }
+        }
+        return {
+            success: true,
+            filePath: result.filePaths[0]
+        }
+    })
+    ipcMain.handle('read-file-chunk-base64', async (_event, { filePath, byteOffset = 0, byteLength }) => {
+        try {
+            return {
+                success: true,
+                ...await readLocalFileChunkBase64(filePath, byteOffset, byteLength)
+            }
+        } catch (err) {
+            return { success: false, error: err.message }
+        }
+    })
 
 
     // Default open or close DevTools by F12 in development
@@ -237,6 +334,18 @@ app.whenReady().then(() => {
     // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
     app.on('browser-window-created', (_, window) => {
         optimizer.watchWindowShortcuts(window)
+    })
+
+    const cleanupResults = await Promise.allSettled([
+        session.defaultSession.clearCache(),
+        session.defaultSession.clearStorageData({ storages: ['indexdb'] })
+    ])
+    cleanupResults.forEach((result, index) => {
+        if (result.status === 'rejected') {
+            writeRuntimeEvent(index === 0 ? 'cache-cleanup-failed' : 'legacy-indexeddb-cleanup-failed', {
+                error: result.reason?.message || String(result.reason)
+            })
+        }
     })
 
     createWindow()
