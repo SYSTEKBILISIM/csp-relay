@@ -230,7 +230,7 @@
 .exec-title-row {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 7px;
     min-height: 32px;
 }
 
@@ -253,7 +253,7 @@
     flex: 0 0 auto;
     align-items: center;
     justify-self: end;
-    gap: 5px;
+    gap: 7px;
 }
 
 .execution-control-group {
@@ -366,18 +366,18 @@
 }
 
 .recovery-checkpoint-info-button {
-    flex: 0 0 28px;
-    width: 28px;
-    min-width: 28px;
-    height: 28px;
+    flex: 0 0 32px;
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
     margin: 0;
     padding: 0;
     color: #2563eb;
     background: #eff6ff;
     border: 1px solid #bfdbfe;
     border-radius: 9px;
-    font-size: 16px;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    font-size: 15px;
+    box-shadow: none;
 }
 
 .recovery-checkpoint-info-button:hover {

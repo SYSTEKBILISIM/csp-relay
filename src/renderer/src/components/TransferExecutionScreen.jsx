@@ -1123,36 +1123,6 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             <div className="exec-header">
                 <div className="exec-header-copy">
                     <div className="exec-title-row">
-                        {definitionData?.recoveredSession && (
-                            <Popover
-                                trigger={['hover', 'click']}
-                                placement="bottomLeft"
-                                mouseEnterDelay={0.12}
-                                title="Recovery checkpoint"
-                                classNames={{ root: 'recovery-checkpoint-popover' }}
-                                content={
-                                    <div className="recovery-checkpoint-info">
-                                        <Text type="secondary">
-                                            This transfer was restored from a checkpoint. The Excel data was reloaded
-                                            from its source path; only row statuses and execution logs were recovered.
-                                        </Text>
-                                        {definitionData.recoveredSession.source && (
-                                            <Text className="recovery-checkpoint-source">
-                                                Source: {definitionData.recoveredSession.source}
-                                            </Text>
-                                        )}
-                                    </div>
-                                }
-                            >
-                                <Button
-                                    type="text"
-                                    size="small"
-                                    icon={<InfoCircleOutlined />}
-                                    className="recovery-checkpoint-info-button"
-                                    aria-label="Recovery checkpoint information"
-                                />
-                            </Popover>
-                        )}
                         <Title level={3}>
                             {isStopped ? 'Transfer Stopped' : isComplete ? 'Transfer Completed' : 'Queue Details & Transfer'}
                         </Title>
@@ -1162,6 +1132,36 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     </Text>
                 </div>
                 <div className="exec-header-actions">
+                    {definitionData?.recoveredSession && (
+                        <Popover
+                            trigger={['hover', 'click']}
+                            placement="bottomLeft"
+                            mouseEnterDelay={0.12}
+                            title="Recovery checkpoint"
+                            classNames={{ root: 'recovery-checkpoint-popover' }}
+                            content={
+                                <div className="recovery-checkpoint-info">
+                                    <Text type="secondary">
+                                        This transfer was restored from a checkpoint. The Excel data was reloaded
+                                        from its source path; only row statuses and execution logs were recovered.
+                                    </Text>
+                                    {definitionData.recoveredSession.source && (
+                                        <Text className="recovery-checkpoint-source">
+                                            Source: {definitionData.recoveredSession.source}
+                                        </Text>
+                                    )}
+                                </div>
+                            }
+                        >
+                            <Button
+                                type="text"
+                                size="small"
+                                icon={<InfoCircleOutlined />}
+                                className="recovery-checkpoint-info-button"
+                                aria-label="Recovery checkpoint information"
+                            />
+                        </Popover>
+                    )}
                     <div className={`execution-control-group${executionMode === 'parallel' ? ' is-parallel' : ''}`}>
                         <Segmented
                             className="execution-mode-header"
