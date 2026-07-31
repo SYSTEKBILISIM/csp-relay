@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Card, Typography, Button, Table, Progress, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Popover, Checkbox, Select, App, Form } from 'antd';
-import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, ExportOutlined, OrderedListOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, ExportOutlined, OrderedListOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import Editor from '@monaco-editor/react';
 import { useTransferExecution } from '../hooks/useTransferExecution';
@@ -10,7 +10,11 @@ import { ResizableTitle } from './ResizableTitle';
 import { logDB } from '../services/IndexedDBService';
 import { renewSynergySession } from '../services/SessionService';
 import { globalStore } from '../store/GlobalStore';
-import { parseRowSelectionExpression } from '../utils/rowSelectionExpression';
+import {
+    normalizePrimarySelectionValue,
+    parsePrimarySelectionValues,
+    parseRowSelectionExpression
+} from '../utils/rowSelectionExpression';
 import '../assets/css/TransferExecutionScreen.css';
 
 // Robust Turkish-aware lowercasing with normalization
@@ -174,6 +178,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const [quickSelectionOpen, setQuickSelectionOpen] = useState(false);
     const [quickSelectionValue, setQuickSelectionValue] = useState('');
     const [quickSelectionMode, setQuickSelectionMode] = useState('select');
+    const [quickSelectionSource, setQuickSelectionSource] = useState('rowNumber');
     const [quickSelectionError, setQuickSelectionError] = useState('');
     const searchInputRef = useRef(null);
     const quickSelectionInputRef = useRef(null);
@@ -898,21 +903,42 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     }, [openQuickSelection]);
 
     const applyQuickSelection = () => {
-        let rowNumbers;
+        let requestedLogs = [];
+        let firstRequestedKey = null;
+        let unmatchedValueCount = 0;
+
         try {
-            const maximumRowNumber = logs.reduce(
-                (maximum, log) => Math.max(maximum, Number(log.id) || 0),
-                0
-            );
-            rowNumbers = parseRowSelectionExpression(quickSelectionValue, maximumRowNumber);
+            if (quickSelectionSource === 'primary') {
+                const primaryValues = parsePrimarySelectionValues(quickSelectionValue);
+                const requestedValueSet = new Set(primaryValues.map(normalizePrimarySelectionValue));
+                const matchedValueSet = new Set();
+
+                requestedLogs = logs.filter(log => {
+                    const rowData = getRowData(log.key) || {};
+                    const normalizedValue = normalizePrimarySelectionValue(
+                        getRowValue(rowData, definitionData.mainIdColumn)
+                    );
+                    const isMatch = normalizedValue && requestedValueSet.has(normalizedValue);
+                    if (isMatch) matchedValueSet.add(normalizedValue);
+                    return isMatch;
+                });
+                unmatchedValueCount = primaryValues.length - matchedValueSet.size;
+                firstRequestedKey = requestedLogs[0]?.key ?? null;
+            } else {
+                const maximumRowNumber = logs.reduce(
+                    (maximum, log) => Math.max(maximum, Number(log.id) || 0),
+                    0
+                );
+                const rowNumbers = parseRowSelectionExpression(quickSelectionValue, maximumRowNumber);
+                const requestedRowSet = new Set(rowNumbers);
+                requestedLogs = logs.filter(log => requestedRowSet.has(Number(log.id)));
+                firstRequestedKey = requestedLogs[0]?.key ?? null;
+            }
         } catch (error) {
             setQuickSelectionError(error.message);
             return;
         }
 
-        const requestedRowSet = new Set(rowNumbers);
-        const requestedLogs = logs
-            .filter(log => requestedRowSet.has(Number(log.id)));
         const requestedKeys = requestedLogs
             .filter(log => log?.status === 'Pending')
             .map(log => log.key);
@@ -935,9 +961,12 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
 
         const action = quickSelectionMode === 'select' ? 'selected' : 'removed from selection';
         const skipped = lockedRowCount > 0 ? ` ${lockedRowCount} non-pending row(s) were skipped.` : '';
-        message.success(`${requestedKeys.length} row(s) ${action}.${skipped}`);
+        const unmatched = unmatchedValueCount > 0
+            ? ` ${unmatchedValueCount} primary value(s) were not found.`
+            : '';
+        message.success(`${requestedKeys.length} row(s) ${action}.${skipped}${unmatched}`);
 
-        const firstRowIndex = logs.findIndex(log => Number(log.id) === rowNumbers[0]);
+        const firstRowIndex = logs.findIndex(log => log.key === firstRequestedKey);
         if (firstRowIndex >= 0 && queueTableRef.current) {
             queueTableRef.current.scrollTo({ index: firstRowIndex, align: 'top' });
         }
@@ -1055,9 +1084,10 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
 
         modal.confirm({
             centered: true,
-            className: 'stop-transfer-confirm-modal',
+            className: 'app-confirm-modal stop-transfer-confirm-modal',
+            getContainer: false,
             icon: null,
-            width: 410,
+            width: 430,
             content: (
                 <div className="stop-transfer-dialog">
                     <div className="stop-transfer-dialog-header">
@@ -1115,8 +1145,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         };
     };
 
-    const showTransferIndicator = loading || isPaused || retryState.isRetrying;
-    const isTransferActive = loading || retryState.isRetrying;
+    const showTransferIndicator = loading;
 
     return (
         <Card variant="borderless" className="exec-container" styles={{ body: { padding: '16px', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 92px)' } }}>
@@ -1141,14 +1170,17 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                             classNames={{ root: 'recovery-checkpoint-popover' }}
                             content={
                                 <div className="recovery-checkpoint-info">
-                                    <Text type="secondary">
-                                        This transfer was restored from a checkpoint. The Excel data was reloaded
-                                        from its source path; only row statuses and execution logs were recovered.
+                                    <Text type="secondary" className="recovery-checkpoint-message">
+                                        Excel rows were reloaded from the source file, while saved transfer statuses
+                                        and execution details were restored from this checkpoint.
                                     </Text>
                                     {definitionData.recoveredSession.source && (
-                                        <Text className="recovery-checkpoint-source">
-                                            Source: {definitionData.recoveredSession.source}
-                                        </Text>
+                                        <div className="recovery-checkpoint-source">
+                                            <span className="recovery-checkpoint-source-label">Source</span>
+                                            <span className="recovery-checkpoint-source-value">
+                                                {definitionData.recoveredSession.source}
+                                            </span>
+                                        </div>
                                     )}
                                 </div>
                             }
@@ -1156,9 +1188,9 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                             <Button
                                 type="text"
                                 size="small"
-                                icon={<InfoCircleOutlined />}
-                                className="recovery-checkpoint-info-button"
-                                aria-label="Recovery checkpoint information"
+                                icon={<WarningOutlined />}
+                                className="recovery-checkpoint-warning-button"
+                                aria-label="Recovery checkpoint warning"
                             />
                         </Popover>
                     )}
@@ -1238,7 +1270,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                             </div>
                             <div className="execution-count-value">
                                 {showTransferIndicator && (
-                                    <span className={isTransferActive ? 'transfer-activity-loader is-active' : 'transfer-activity-loader'} aria-hidden="true">
+                                    <span className="transfer-activity-loader is-active" aria-hidden="true">
                                         <span />
                                         <span />
                                         <span />
@@ -1466,7 +1498,10 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             <div ref={tableContainerRef} className="table-container-outer" style={{ marginTop: 12 }}>
                 <div className="table-container-inner">
                     {activeTab === 'queue' && (
-                        <div id="queue-table-container" className="scrollable-table-box">
+                        <div
+                            id="queue-table-container"
+                            className={`scrollable-table-box${logs.length === 0 ? ' is-empty' : ''}`}
+                        >
                             <Table
                                 components={{ header: { cell: ResizableTitle } }}
                                 ref={queueTableRef}
@@ -1487,7 +1522,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                     {activeTab === 'results' && (
                         <div
                             id="results-table-container"
-                            className="results-table-container scrollable-table-box"
+                            className={`results-table-container scrollable-table-box${computedResultLogs.length === 0 ? ' is-empty' : ''}`}
                             onScrollCapture={handleResultsScroll}
                             onWheel={handleUserInteraction}
                             onMouseDown={handleUserInteraction}
@@ -1514,13 +1549,13 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 className="quick-selection-modal"
                 open={quickSelectionOpen}
                 centered
-                width={460}
+                width={500}
                 title={
                     <div className="quick-selection-title">
                         <span className="quick-selection-title-icon"><OrderedListOutlined /></span>
                         <span>
                             <strong>Quick Selection</strong>
-                            <small>Select queue rows by the numbers in the # column</small>
+                            <small>Select queue rows by # or the primary Excel column</small>
                         </span>
                     </div>
                 }
@@ -1539,33 +1574,76 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 }}
             >
                 <div className="quick-selection-content">
-                    <Segmented
-                        block
-                        value={quickSelectionMode}
-                        onChange={setQuickSelectionMode}
-                        options={[
-                            { label: 'Select Rows', value: 'select' },
-                            { label: 'Remove Rows', value: 'remove' }
-                        ]}
-                    />
-                    <div className="quick-selection-field">
-                        <label htmlFor="quick-selection-expression">Rows</label>
-                        <Input
-                            id="quick-selection-expression"
-                            ref={quickSelectionInputRef}
-                            size="large"
-                            value={quickSelectionValue}
-                            status={quickSelectionError ? 'error' : undefined}
-                            placeholder="1-10 or 1,3,4,7-12"
-                            onChange={(event) => {
-                                setQuickSelectionValue(event.target.value);
-                                if (quickSelectionError) setQuickSelectionError('');
-                            }}
-                            onPressEnter={applyQuickSelection}
+                    <div className="quick-selection-option">
+                        <label>Action</label>
+                        <Segmented
+                            block
+                            value={quickSelectionMode}
+                            onChange={setQuickSelectionMode}
+                            options={[
+                                { label: 'Select Rows', value: 'select' },
+                                { label: 'Remove Rows', value: 'remove' }
+                            ]}
                         />
+                    </div>
+                    <div className="quick-selection-option">
+                        <label>Selection Type</label>
+                        <Segmented
+                            block
+                            value={quickSelectionSource}
+                            onChange={(value) => {
+                                setQuickSelectionSource(value);
+                                setQuickSelectionValue('');
+                                setQuickSelectionError('');
+                                setTimeout(() => quickSelectionInputRef.current?.focus(), 0);
+                            }}
+                            options={[
+                                { label: '# Row Number', value: 'rowNumber' },
+                                { label: `Primary · ${definitionData.mainIdColumn || 'ID'}`, value: 'primary' }
+                            ]}
+                        />
+                    </div>
+                    <div className="quick-selection-field">
+                        <label htmlFor="quick-selection-expression">
+                            {quickSelectionSource === 'primary'
+                                ? `Primary Values (${definitionData.mainIdColumn || 'ID'})`
+                                : 'Row Numbers'}
+                        </label>
+                        {quickSelectionSource === 'primary' ? (
+                            <Input.TextArea
+                                id="quick-selection-expression"
+                                ref={quickSelectionInputRef}
+                                value={quickSelectionValue}
+                                status={quickSelectionError ? 'error' : undefined}
+                                placeholder={'565\n581\nABC Company'}
+                                autoSize={{ minRows: 4, maxRows: 8 }}
+                                onChange={(event) => {
+                                    setQuickSelectionValue(event.target.value);
+                                    if (quickSelectionError) setQuickSelectionError('');
+                                }}
+                            />
+                        ) : (
+                            <Input
+                                id="quick-selection-expression"
+                                ref={quickSelectionInputRef}
+                                size="large"
+                                value={quickSelectionValue}
+                                status={quickSelectionError ? 'error' : undefined}
+                                placeholder="1-10 or 1,3,4,7-12"
+                                onChange={(event) => {
+                                    setQuickSelectionValue(event.target.value);
+                                    if (quickSelectionError) setQuickSelectionError('');
+                                }}
+                                onPressEnter={applyQuickSelection}
+                            />
+                        )}
                         {quickSelectionError
                             ? <div className="quick-selection-error">{quickSelectionError}</div>
-                            : <div className="quick-selection-help">Use commas to combine individual rows and ranges. Only Pending rows can change.</div>}
+                            : <div className="quick-selection-help">
+                                {quickSelectionSource === 'primary'
+                                    ? 'Paste a filtered Excel column or enter one value per line. Matching is case-insensitive; only Pending rows can change.'
+                                    : 'Use commas to combine individual rows and ranges. Only Pending rows can change.'}
+                            </div>}
                     </div>
                     <div className="quick-selection-summary">
                         <span>{logs.length} queue rows</span>

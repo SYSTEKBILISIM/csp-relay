@@ -192,6 +192,14 @@ app.whenReady().then(async () => {
         await transferLogReady
         return transferLogStore.listRecoverable()
     })
+    ipcMain.handle('transfer-log:get-recovery-summary', async (_event, sessionId) => {
+        await transferLogReady
+        return transferLogStore.getRecoverySummary(sessionId)
+    })
+    ipcMain.handle('transfer-log:delete-recovery-session', async (_event, sessionId) => {
+        await transferLogReady
+        return transferLogStore.deleteRecoverySession(sessionId)
+    })
     ipcMain.handle('transfer-log:recover', async (_event, sessionId) => {
         await transferLogReady
         return transferLogStore.recover(sessionId)

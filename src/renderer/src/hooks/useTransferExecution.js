@@ -60,6 +60,15 @@ const getExecutionWorkUnits = (executionLog) => {
 
 const isReliableTimingStatus = status => status === 'Success' || status === 'Warning';
 
+const hasStoredLogDetails = details => Boolean(
+    details && (
+        details.payload !== undefined ||
+        details.response !== undefined ||
+        (Array.isArray(details.executionLog) && details.executionLog.length > 0) ||
+        (Array.isArray(details.warnings) && details.warnings.length > 0)
+    )
+);
+
 export const useTransferExecution = (definitionData, onStatusChange) => {
     const { message } = App.useApp();
     const [loading, setLoading] = useState(false);
@@ -99,6 +108,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         remainingMs: null
     });
     const logSessionInitializedRef = useRef(false);
+    const ownedLogSessionCreatedRef = useRef(false);
     const [isComplete, setIsComplete] = useState(false);
     const [isStopped, setIsStopped] = useState(false);
     const [excelData, setExcelData] = useState([]);
@@ -253,6 +263,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         if (sheetName && storedData[sheetName]) {
             const data = storedData[sheetName];
             setExcelData(data);
+            ownedLogSessionCreatedRef.current = false;
 
             const recoveredResults = definitionData?.recoveredSession?.results;
             if (definitionData?.recoveredSession && Array.isArray(recoveredResults)) {
@@ -284,36 +295,35 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 const checkpointSelection = Array.isArray(definitionData?.recoveredSession?.selectedRowKeys)
                     ? new Set(definitionData.recoveredSession.selectedRowKeys.map(Number))
                     : null;
-                const executableKeys = recoveredLogs
-                    .filter(log =>
-                        (!checkpointSelection || checkpointSelection.has(Number(log.key))) &&
-                        (log.status === 'Pending' || log.status === 'Error' || log.status === 'ValidationError')
-                    )
+                const recoveredSelectionKeys = recoveredLogs
+                    .filter(log => !checkpointSelection || checkpointSelection.has(Number(log.key)))
                     .map(log => log.key);
-                const success = recoveredLogs.filter(log => log.status === 'Success' || log.status === 'Warning').length;
-                const error = recoveredLogs.filter(log => log.status === 'Error' || log.status === 'ValidationError').length;
-                const processed = recoveredLogs.filter(log => log.status !== 'Pending').length;
+                const recoveredSelectionSet = new Set(recoveredSelectionKeys);
+                const selectedLogs = recoveredLogs.filter(log => recoveredSelectionSet.has(log.key));
+                const success = selectedLogs.filter(log => log.status === 'Success' || log.status === 'Warning').length;
+                const error = selectedLogs.filter(log => log.status === 'Error' || log.status === 'ValidationError').length;
+                const processed = selectedLogs.filter(log => log.status !== 'Pending').length;
 
                 logsStateRef.current = recoveredLogs;
                 setLogs(recoveredLogs);
-                selectedRowKeysRef.current = executableKeys;
-                _setSelectedRowKeys(executableKeys);
+                selectedRowKeysRef.current = recoveredSelectionKeys;
+                _setSelectedRowKeys(recoveredSelectionKeys);
                 setStats({
-                    total: recoveredLogs.length,
+                    total: selectedLogs.length,
                     processed,
                     success,
                     error,
                     retried: 0,
                     successBreakdown: {
-                        Success: recoveredLogs.filter(log => log.status === 'Success').length,
-                        Warning: recoveredLogs.filter(log => log.status === 'Warning').length
+                        Success: selectedLogs.filter(log => log.status === 'Success').length,
+                        Warning: selectedLogs.filter(log => log.status === 'Warning').length
                     },
                     errorBreakdown: {
-                        ValidationError: recoveredLogs.filter(log => log.status === 'ValidationError').length,
-                        Error: recoveredLogs.filter(log => log.status === 'Error').length
+                        ValidationError: selectedLogs.filter(log => log.status === 'ValidationError').length,
+                        Error: selectedLogs.filter(log => log.status === 'Error').length
                     }
                 });
-                setProgress(recoveredLogs.length ? Math.round((processed / recoveredLogs.length) * 100) : 0);
+                setProgress(selectedLogs.length ? Math.round((processed / selectedLogs.length) * 100) : 0);
                 setEstimatedTime(null);
                 setEstimatedFinishAt(null);
                 setIsComplete(false);
@@ -444,6 +454,9 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         isPausedRef.current = false;
         setIsComplete(true);
         setIsStopped(stopped);
+        // A completed/stopped execution owns one immutable recovery session.
+        // Only Pause/Resume may continue writing to the same session.
+        logSessionInitializedRef.current = false;
         updateRetryState({ isRetrying: false });
         apiCacheActivationRef.current = Promise.resolve(apiCacheActivationRef.current)
             .catch(() => undefined)
@@ -561,6 +574,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                         mainSheet: definitionData?.mainSheet,
                         fileName: definitionData?.fileName,
                         totalRows: logsStateRef.current.length,
+                        selectedRowCount: selectedRowKeysRef.current.length,
                         recoveryMode: 'checkpoint',
                         transferStartedAt: new Date(startedAt).toLocaleString()
                     });
@@ -570,6 +584,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                         .then(() => apiCache.current.activate(logSession.sessionId, false));
                     await apiCacheActivationRef.current;
                     logSessionInitializedRef.current = true;
+                    ownedLogSessionCreatedRef.current = true;
                     try {
                         await logDB.saveRecoveryContext({
                             mainUrl: globalStore.get('mainUrl'),
@@ -584,9 +599,25 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                         });
                         if (definitionData?.recoveredSession) {
                             const completedCheckpointRows = logsStateRef.current
-                                .filter(log => log.status !== 'Pending' && log.status !== 'Processing');
+                                .filter(log =>
+                                    selectedRowKeysRef.current.includes(log.key) &&
+                                    log.status !== 'Pending' &&
+                                    log.status !== 'Processing'
+                                );
                             for (const checkpointRow of completedCheckpointRows) {
-                                await logDB.saveDetail(checkpointRow.key, {}, checkpointRow);
+                                const checkpointDetails = checkpointRow.details || (
+                                    checkpointRow.hasDetails && definitionData.recoveredSession.id
+                                        ? await logDB.getRecoveredDetail(
+                                            definitionData.recoveredSession.id,
+                                            checkpointRow.key
+                                        )
+                                        : null
+                                );
+                                await logDB.saveDetail(
+                                    checkpointRow.key,
+                                    checkpointDetails || {},
+                                    checkpointRow
+                                );
                             }
                         }
                     } catch (contextError) {
@@ -929,6 +960,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
     const resetTransfer = () => {
         logSessionInitializedRef.current = false;
+        ownedLogSessionCreatedRef.current = false;
         activeApiCacheSessionIdRef.current = null;
         apiCacheActivationRef.current = Promise.resolve(apiCacheActivationRef.current)
             .catch(() => undefined)
@@ -1001,6 +1033,25 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         }, 150);
     };
 
+    const getLogDetailsAsync = async (key) => {
+        const recoveredSessionId = definitionData?.recoveredSession?.id;
+        const recoveredRowDetails = logsStateRef.current.find(log => log.key === key)?.details;
+
+        if (recoveredSessionId && !ownedLogSessionCreatedRef.current) {
+            return await logDB.getRecoveredDetail(recoveredSessionId, key) || recoveredRowDetails || null;
+        }
+        if (!ownedLogSessionCreatedRef.current && hasStoredLogDetails(recoveredRowDetails)) {
+            return recoveredRowDetails;
+        }
+
+        const activeDetails = await logDB.getDetail(key);
+        if (hasStoredLogDetails(activeDetails) || !recoveredSessionId) {
+            return activeDetails;
+        }
+
+        return await logDB.getRecoveredDetail(recoveredSessionId, key) || recoveredRowDetails || null;
+    };
+
     return {
         loading,
         progress,
@@ -1027,7 +1078,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         moveLog,
         resetTransfer,
         retryFailed,
-        getLogDetailsAsync: (key) => logDB.getDetail(key),
+        getLogDetailsAsync,
         getRowData: (key) => allSheetsData.current[definitionData?.mainSheet]?.[key],
         retryState,
         isRetryMode,

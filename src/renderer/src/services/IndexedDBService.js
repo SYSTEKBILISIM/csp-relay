@@ -9,12 +9,15 @@ class FileLogService {
         if (!this.api) throw new Error('File log API is unavailable.')
         const { details: _summaryDetails, ...summaryWithoutDetails } = summary
         const checkpointDetails = {
+            payload: details?.payload,
+            response: details?.response,
             warnings: details?.warnings || [],
             executionLog: (details?.executionLog || []).map(step => ({
                 key: step.key,
                 step: step.step,
                 details: step.details,
-                status: step.status
+                status: step.status,
+                raw: step.raw
             }))
         }
         return this.api.append(key, optimizeLogValue({
@@ -57,6 +60,16 @@ class FileLogService {
     async listRecoverable() {
         if (!this.api) return []
         return this.api.listRecoverable()
+    }
+
+    async getRecoverySummary(sessionId) {
+        if (!this.api) return null
+        return this.api.getRecoverySummary(sessionId)
+    }
+
+    async deleteRecoverySession(sessionId) {
+        if (!this.api) throw new Error('File log API is unavailable.')
+        return this.api.deleteRecoverySession(sessionId)
     }
 
     async recover(sessionId = 'latest') {

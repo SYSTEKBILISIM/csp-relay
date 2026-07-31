@@ -40,6 +40,8 @@ const api = {
             }),
         getPath: () => ipcRenderer.invoke('transfer-log:path'),
         listRecoverable: () => ipcRenderer.invoke('transfer-log:list-recoverable'),
+        getRecoverySummary: (sessionId) => ipcRenderer.invoke('transfer-log:get-recovery-summary', sessionId),
+        deleteRecoverySession: (sessionId) => ipcRenderer.invoke('transfer-log:delete-recovery-session', sessionId),
         recover: (sessionId = 'latest') => ipcRenderer.invoke('transfer-log:recover', sessionId),
         exportJson: (metadata, suggestedName) => ipcRenderer.invoke('transfer-log:export-json', { metadata, suggestedName }),
         exportDataJson: (data, suggestedName) => ipcRenderer.invoke('transfer-log:export-data-json', { data, suggestedName })

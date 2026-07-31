@@ -34,3 +34,33 @@ export const parseRowSelectionExpression = (expression, rowCount) => {
 
     return [...rows].sort((left, right) => left - right);
 };
+
+export const normalizePrimarySelectionValue = value => {
+    if (value === null || value === undefined) return '';
+    return String(value)
+        .trim()
+        .normalize('NFC')
+        .toLocaleLowerCase('tr-TR');
+};
+
+export const parsePrimarySelectionValues = expression => {
+    const value = String(expression ?? '');
+    const values = value
+        .split(/\r?\n|\t/)
+        .map(item => item.trim())
+        .filter(Boolean);
+
+    if (values.length === 0) {
+        throw new Error('Paste at least one primary column value.');
+    }
+
+    const uniqueValues = new Map();
+    values.forEach(item => {
+        const normalizedValue = normalizePrimarySelectionValue(item);
+        if (normalizedValue && !uniqueValues.has(normalizedValue)) {
+            uniqueValues.set(normalizedValue, item);
+        }
+    });
+
+    return [...uniqueValues.values()];
+};

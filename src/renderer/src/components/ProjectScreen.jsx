@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Select, Button, Typography, Row, Col, Upload, Tooltip, App, Modal, Empty, Spin, Tag } from 'antd';
-import { ProjectOutlined, PartitionOutlined, BuildOutlined, FileTextOutlined, FileExcelOutlined, InfoCircleOutlined, HistoryOutlined, CheckCircleFilled, InboxOutlined } from '@ant-design/icons';
+import { ProjectOutlined, PartitionOutlined, BuildOutlined, FileTextOutlined, FileExcelOutlined, InfoCircleOutlined, HistoryOutlined, CheckCircleFilled, InboxOutlined, DeleteOutlined, ExclamationCircleFilled } from '@ant-design/icons';
 import { globalStore } from '../store/GlobalStore';
 import { parseExcelFile } from '../services/ExcelService';
 import { apiClient } from '../api/client';
@@ -40,7 +40,7 @@ const turkishLower = (str) => {
 };
 
 export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], initialData }) => {
-    const { message } = App.useApp();
+    const { message, modal } = App.useApp();
     const [form] = Form.useForm();
 
     // Watch fields for dynamic icon coloring
@@ -68,8 +68,24 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
     const [recoverableSessions, setRecoverableSessions] = useState([]);
     const [recoverySessionsLoading, setRecoverySessionsLoading] = useState(false);
     const [recoveringSessionId, setRecoveringSessionId] = useState(null);
+    const [deletingRecoverySessionId, setDeletingRecoverySessionId] = useState(null);
     const [selectedRecoverySessionId, setSelectedRecoverySessionId] = useState(null);
     const [uploadedRecoverySession, setUploadedRecoverySession] = useState(null);
+
+    const hydrateRecoverySessionSummaries = async sessions => {
+        for (const session of sessions) {
+            if (session.summaryKnown) continue;
+            try {
+                const summary = await logDB.getRecoverySummary(session.id);
+                if (!summary) continue;
+                setRecoverableSessions(current => current.map(item =>
+                    item.id === session.id ? { ...item, ...summary } : item
+                ));
+            } catch (error) {
+                console.error(`Recovery summary could not be calculated for ${session.id}:`, error);
+            }
+        }
+    };
 
     const openRecoverySessions = async () => {
         setRecoveryModalOpen(true);
@@ -81,6 +97,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                 .filter(session => session.hasRecoveryContext);
             setRecoverableSessions(sessions);
             setSelectedRecoverySessionId(sessions[0]?.id || null);
+            void hydrateRecoverySessionSummaries(sessions);
         } catch (error) {
             setRecoverableSessions([]);
             message.error(`Recent sessions could not be loaded: ${error.message}`);
@@ -108,6 +125,55 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
         } finally {
             setRecoveringSessionId(null);
         }
+    };
+
+    const deleteSelectedRecoverySession = () => {
+        const session = recoverableSessions.find(item => item.id === selectedRecoverySessionId);
+        if (!session) return;
+
+        modal.confirm({
+            title: null,
+            icon: null,
+            className: 'app-confirm-modal delete-recovery-confirm-modal',
+            getContainer: false,
+            width: 430,
+            content: (
+                <div className="delete-recovery-dialog">
+                    <div className="delete-recovery-dialog-header">
+                        <ExclamationCircleFilled className="delete-recovery-dialog-icon" />
+                        <div>
+                            <div className="delete-recovery-dialog-title">Delete transfer checkpoint?</div>
+                            <div className="delete-recovery-dialog-description">
+                                This permanently deletes &quot;{session.label}&quot; and its saved transfer log,
+                                context, summary, and recovery files.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ),
+            okText: 'Delete checkpoint',
+            okType: 'danger',
+            cancelText: 'Cancel',
+            centered: true,
+            onOk: async () => {
+                setDeletingRecoverySessionId(session.id);
+                try {
+                    await logDB.deleteRecoverySession(session.id);
+                    const remainingSessions = recoverableSessions.filter(item => item.id !== session.id);
+                    setRecoverableSessions(remainingSessions);
+                    setSelectedRecoverySessionId(
+                        remainingSessions[0]?.id ||
+                        (uploadedRecoverySession ? LOCAL_RECOVERY_SESSION_ID : null)
+                    );
+                    message.success('Transfer checkpoint deleted.');
+                } catch (error) {
+                    message.error(`The checkpoint could not be deleted: ${error.message}`);
+                    throw error;
+                } finally {
+                    setDeletingRecoverySessionId(null);
+                }
+            }
+        });
     };
 
     const handleRecoveryFileUpload = (file) => {
@@ -911,16 +977,30 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                     <Button
                         key="cancel"
                         onClick={() => setRecoveryModalOpen(false)}
-                        disabled={Boolean(recoveringSessionId)}
+                        disabled={Boolean(recoveringSessionId || deletingRecoverySessionId)}
                     >
                         Cancel
+                    </Button>,
+                    <Button
+                        key="delete"
+                        danger
+                        icon={<DeleteOutlined />}
+                        loading={Boolean(deletingRecoverySessionId)}
+                        disabled={
+                            !selectedRecoverySessionId ||
+                            selectedRecoverySessionId === LOCAL_RECOVERY_SESSION_ID ||
+                            Boolean(recoveringSessionId || deletingRecoverySessionId)
+                        }
+                        onClick={deleteSelectedRecoverySession}
+                    >
+                        Delete selected
                     </Button>,
                     <Button
                         key="restore"
                         type="primary"
                         icon={<HistoryOutlined />}
                         loading={Boolean(recoveringSessionId)}
-                        disabled={!selectedRecoverySessionId}
+                        disabled={!selectedRecoverySessionId || Boolean(deletingRecoverySessionId)}
                         onClick={() => restoreRecoverySession(selectedRecoverySessionId)}
                     >
                         Restore selected checkpoint
@@ -967,7 +1047,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                                     className={`project-recovery-item${selectedRecoverySessionId === session.id ? ' project-recovery-item-selected' : ''}`}
                                     key={session.id}
                                     onClick={() => setSelectedRecoverySessionId(session.id)}
-                                    disabled={Boolean(recoveringSessionId)}
+                                    disabled={Boolean(recoveringSessionId || deletingRecoverySessionId)}
                                 >
                                     <div className="project-recovery-item-info">
                                         <div className="project-recovery-item-heading">
@@ -978,13 +1058,25 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                                                 <Tag color="blue" bordered={false}>Checkpoint</Tag>
                                             )}
                                         </div>
-                                        <Text type="secondary" className="project-recovery-item-meta">
-                                            {session.recordCountKnown
-                                                ? `${session.recordCount} rows`
-                                                : formatRecoverySessionSize(session.sizeBytes)}
-                                            {' · '}
-                                            {new Date(session.modifiedAt).toLocaleString()}
-                                        </Text>
+                                        <div className="project-recovery-item-meta">
+                                            <span>
+                                                {session.recordCountKnown
+                                                    ? `${session.recordCount} total`
+                                                    : formatRecoverySessionSize(session.sizeBytes)}
+                                            </span>
+                                            {Number.isFinite(session.selectedRowCount) && (
+                                                <span className="project-recovery-stat-selected">
+                                                    Selected {session.selectedRowCount}
+                                                </span>
+                                            )}
+                                            <span className="project-recovery-stat-success">
+                                                Success {session.summaryKnown ? session.successCount : '…'}
+                                            </span>
+                                            <span className="project-recovery-stat-failed">
+                                                Failed {session.summaryKnown ? session.failedCount : '…'}
+                                            </span>
+                                            <span>{new Date(session.modifiedAt).toLocaleString()}</span>
+                                        </div>
                                     </div>
                                     <CheckCircleFilled className="project-recovery-selection-icon" />
                                 </button>
@@ -995,7 +1087,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                                 type="button"
                                 className={`project-recovery-item project-recovery-local-item${selectedRecoverySessionId === LOCAL_RECOVERY_SESSION_ID ? ' project-recovery-item-selected' : ''}`}
                                 onClick={() => setSelectedRecoverySessionId(LOCAL_RECOVERY_SESSION_ID)}
-                                disabled={Boolean(recoveringSessionId)}
+                                disabled={Boolean(recoveringSessionId || deletingRecoverySessionId)}
                             >
                                 <div className="project-recovery-item-info">
                                     <div className="project-recovery-item-heading">

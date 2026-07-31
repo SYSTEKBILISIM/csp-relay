@@ -129,27 +129,6 @@
     margin-top: 4px !important;
 }
 
-.stop-transfer-confirm-modal .ant-modal-content {
-    overflow: hidden;
-    padding: 0 !important;
-}
-
-.stop-transfer-confirm-modal .ant-modal-confirm-body-wrapper {
-    padding: 22px;
-}
-
-.stop-transfer-confirm-modal .ant-modal-confirm-body {
-    display: block;
-}
-
-.stop-transfer-confirm-modal .ant-modal-confirm-paragraph {
-    max-width: none;
-}
-
-.stop-transfer-confirm-modal .ant-modal-confirm-content {
-    margin: 0 !important;
-}
-
 .stop-transfer-dialog-header {
     display: flex;
     align-items: center;
@@ -197,18 +176,6 @@
     line-height: 1.4;
 }
 
-.stop-transfer-confirm-modal .ant-modal-confirm-btns {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 18px;
-}
-
-.stop-transfer-confirm-modal .ant-modal-confirm-btns .ant-btn {
-    min-width: 118px;
-    margin-inline-start: 0 !important;
-}
-
 .exec-header {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -251,7 +218,7 @@
 .exec-header-actions {
     display: flex;
     flex: 0 0 auto;
-    align-items: center;
+    align-items: stretch;
     justify-self: end;
     gap: 7px;
 }
@@ -259,6 +226,8 @@
 .execution-control-group {
     display: inline-flex;
     align-items: center;
+    box-sizing: border-box;
+    height: 40px;
     min-height: 40px;
     padding: 3px 4px;
     border: 1px solid #dfe7f0;
@@ -365,43 +334,107 @@
     color: #94a3b8;
 }
 
-.recovery-checkpoint-info-button {
-    flex: 0 0 32px;
-    width: 32px;
-    min-width: 32px;
-    height: 32px;
+.recovery-checkpoint-warning-button {
+    flex: 0 0 40px;
+    box-sizing: border-box;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
     margin: 0;
-    padding: 0;
-    color: #2563eb;
-    background: #eff6ff;
-    border: 1px solid #bfdbfe;
-    border-radius: 9px;
-    font-size: 15px;
+    padding: 4px;
+    background: #f8fafc;
+    border: 1px solid #dfe7f0;
+    border-radius: 12px;
     box-shadow: none;
 }
 
-.recovery-checkpoint-info-button:hover {
-    color: #1d4ed8 !important;
-    background: #dbeafe !important;
-    border-color: #93c5fd !important;
+.recovery-checkpoint-warning-button .ant-btn-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    margin: 0 !important;
+    color: #d97706;
+    background: #fff7e6;
+    border-radius: 8px;
+    line-height: 1;
+    transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.recovery-checkpoint-warning-button .anticon,
+.recovery-checkpoint-warning-button svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+}
+
+.recovery-checkpoint-warning-button:hover {
+    background: #f8fafc !important;
+    border-color: #dfe7f0 !important;
+}
+
+.recovery-checkpoint-warning-button:hover .ant-btn-icon {
+    color: #b45309;
+    background: #fef3c7;
 }
 
 .recovery-checkpoint-popover {
-    max-width: 320px;
+    width: 280px;
+    max-width: calc(100vw - 32px);
+}
+
+.recovery-checkpoint-popover .ant-popover-inner {
+    padding: 14px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.14);
+}
+
+.recovery-checkpoint-popover .ant-popover-title {
+    min-width: 0;
+    margin-bottom: 8px;
+    color: #1e293b;
+    font-size: 13px;
+    font-weight: 600;
 }
 
 .recovery-checkpoint-info {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    width: 280px;
-    line-height: 1.5;
+    gap: 10px;
+    width: 100%;
+    line-height: 1.55;
+}
+
+.recovery-checkpoint-message {
+    color: #64748b !important;
+    font-size: 12px;
 }
 
 .recovery-checkpoint-source {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    background: #f8fafc;
+    border-radius: 8px;
+}
+
+.recovery-checkpoint-source-label {
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+    text-transform: uppercase;
+}
+
+.recovery-checkpoint-source-value {
     overflow-wrap: anywhere;
     color: #475569;
     font-size: 12px;
+    line-height: 1.45;
 }
 
 .exec-stats-wrapper {
@@ -700,7 +733,8 @@
 }
 
 .transfer-action-buttons > .ant-btn {
-    flex: 1 1 auto;
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 @media (max-width: 840px) {
@@ -735,7 +769,10 @@
 }
 
 .search-input-wrapper {
+    box-sizing: border-box;
     width: 280px;
+    height: 32px;
+    min-height: 32px;
     border-radius: 8px;
     background: #fff;
     border: 1px solid #cbd5e1;
@@ -744,7 +781,9 @@
 }
 
 .quick-selection-trigger {
+    box-sizing: border-box;
     height: 32px;
+    min-height: 32px;
     border-color: #cbd5e1;
     border-radius: 8px;
     color: #334155;
@@ -900,7 +939,7 @@
 .quick-selection-content {
     display: flex;
     flex-direction: column;
-    gap: 18px;
+    gap: 16px;
 }
 
 .quick-selection-content .ant-segmented {
@@ -909,19 +948,27 @@
     background: #f8fafc;
 }
 
+.quick-selection-option {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
 .quick-selection-field {
     display: flex;
     flex-direction: column;
     gap: 7px;
 }
 
+.quick-selection-option > label,
 .quick-selection-field label {
     color: #334155;
     font-size: 12px;
     font-weight: 700;
 }
 
-.quick-selection-field .ant-input {
+.quick-selection-field .ant-input,
+.quick-selection-field .ant-input-textarea textarea {
     border-radius: 8px;
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     font-size: 14px;
@@ -1165,9 +1212,15 @@
     text-align: center !important;
 }
 
-#queue-table-container .ant-table-empty .ant-table-content,
-#results-table-container .ant-table-empty .ant-table-content {
-    overflow-x: hidden !important;
+.scrollable-table-box.is-empty .ant-table-body,
+.scrollable-table-box.is-empty .ant-table-content {
+    overflow: hidden !important;
+    scrollbar-width: none;
+}
+
+.scrollable-table-box.is-empty .ant-table-body::-webkit-scrollbar,
+.scrollable-table-box.is-empty .ant-table-content::-webkit-scrollbar {
+    display: none;
 }
 
 #queue-table-container .ant-table-placeholder .ant-table-cell,

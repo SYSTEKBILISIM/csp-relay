@@ -12,6 +12,7 @@ const LEGACY_PREVIOUS_FILE_NAME = 'last-transfer-log.jsonl'
 const SESSION_FILE_PREFIX = 'active-transfer-log_'
 const RECOVERY_CONTEXT_SUFFIX = '.context.json'
 const RECOVERY_ASSET_SUFFIX = '.recovery'
+const RECOVERY_SUMMARY_SUFFIX = '.summary.json'
 const RECOVERY_SECRET_KEYS = new Set(['password', 'token', 'encrypteddata', 'authorization'])
 const RECOVERY_SOURCE_DATA_KEYS = new Set([
     'excelcontent',
@@ -24,6 +25,23 @@ const RECOVERY_SOURCE_DATA_KEYS = new Set([
 
 const getRecoveryContextPath = filePath => filePath.replace(/\.jsonl$/i, RECOVERY_CONTEXT_SUFFIX)
 const getRecoveryAssetDirectory = filePath => filePath.replace(/\.jsonl$/i, RECOVERY_ASSET_SUFFIX)
+const getRecoverySummaryPath = filePath => filePath.replace(/\.jsonl$/i, RECOVERY_SUMMARY_SUFFIX)
+const getStatusBucket = status => {
+    if (status === 'Success' || status === 'Warning') return 'success'
+    if (status === 'Error' || status === 'ValidationError') return 'failed'
+    return null
+}
+const getLogicalSelectedRowCount = (selectedRowCount, successCount, failedCount) => {
+    const hasSelectedCount = selectedRowCount !== null &&
+        selectedRowCount !== undefined &&
+        Number.isFinite(Number(selectedRowCount))
+    const completedCount = (Number(successCount) || 0) + (Number(failedCount) || 0)
+    return hasSelectedCount
+        ? Math.max(Number(selectedRowCount), completedCount)
+        : completedCount > 0
+            ? completedCount
+            : null
+}
 
 const pathIsType = async (filePath, type) => {
     try {
@@ -87,6 +105,8 @@ export class TransferLogStore {
         this.writeQueue = Promise.resolve()
         this.scanCache = new Map()
         this.recoveryAssetBatches = new Map()
+        this.statusByKey = new Map()
+        this.selectedRowCount = null
     }
 
     async ensureDirectory(fallbackDirectory) {
@@ -108,6 +128,9 @@ export class TransferLogStore {
         this.filePath = join(this.directory, LEGACY_ACTIVE_FILE_NAME)
         const scan = await this.scanFile(this.filePath)
         this.index = new Map([...scan.records].map(([key, value]) => [key, value.location]))
+        this.statusByKey = new Map(
+            [...scan.records].map(([key, value]) => [key, value.record.status])
+        )
         this.recoveryAssetBatches = new Map(
             [...scan.records]
                 .filter(([, value]) => value.record.recoveryAssets?.batchId)
@@ -141,6 +164,11 @@ export class TransferLogStore {
             this.scanCache.delete(this.filePath)
             this.index.clear()
             this.recoveryAssetBatches.clear()
+            this.statusByKey.clear()
+            this.selectedRowCount = Number.isFinite(Number(metadata.selectedRowCount))
+                ? Number(metadata.selectedRowCount)
+                : null
+            await this.writeRecoverySummary()
             this.byteOffset = Buffer.byteLength(metadataLine)
         })
         return this.writeQueue.then(() => ({
@@ -169,6 +197,8 @@ export class TransferLogStore {
                 JSON.stringify(recoveryContext),
                 'utf8'
             )
+            this.selectedRowCount = recoveryContext.selectedRowKeys.length
+            await this.writeRecoverySummary()
             return {
                 success: true,
                 contextFilePath: getRecoveryContextPath(this.filePath)
@@ -182,6 +212,50 @@ export class TransferLogStore {
             return JSON.parse(await readFile(getRecoveryContextPath(filePath), 'utf8'))
         } catch {
             return null
+        }
+    }
+
+    async readRecoverySummary(filePath) {
+        try {
+            const summary = JSON.parse(await readFile(getRecoverySummaryPath(filePath), 'utf8'))
+            return summary && typeof summary === 'object' ? summary : null
+        } catch {
+            return null
+        }
+    }
+
+    getCurrentRecoverySummary() {
+        let successCount = 0
+        let failedCount = 0
+        for (const status of this.statusByKey.values()) {
+            const bucket = getStatusBucket(status)
+            if (bucket === 'success') successCount += 1
+            if (bucket === 'failed') failedCount += 1
+        }
+        return {
+            version: 1,
+            selectedRowCount: getLogicalSelectedRowCount(
+                this.selectedRowCount,
+                successCount,
+                failedCount
+            ),
+            successCount,
+            failedCount,
+            updatedAt: new Date().toISOString()
+        }
+    }
+
+    async writeRecoverySummary() {
+        try {
+            await writeFile(
+                getRecoverySummaryPath(this.filePath),
+                JSON.stringify(this.getCurrentRecoverySummary()),
+                'utf8'
+            )
+            return true
+        } catch (error) {
+            console.warn('[TransferLogStore] Recovery summary could not be saved:', error.message)
+            return false
         }
     }
 
@@ -300,6 +374,15 @@ export class TransferLogStore {
                 'directory'
             )
             const hasRecoveryContext = await pathIsType(getRecoveryContextPath(candidate.filePath), 'file')
+            const [recoveryContext, recoverySummary] = await Promise.all([
+                hasRecoveryContext ? this.readContext(candidate.filePath) : null,
+                this.readRecoverySummary(candidate.filePath)
+            ])
+            const recoverySummaryIsCurrent = Boolean(
+                recoverySummary &&
+                Number.isFinite(Date.parse(recoverySummary.updatedAt)) &&
+                Date.parse(recoverySummary.updatedAt) >= fileStats.mtimeMs - 1000
+            )
             const recoveryAssetRecordCount = cachedScan
                 ? [...cachedScan.records.values()]
                     .filter(value => value.record.recoveryAssets?.fileCount > 0)
@@ -313,11 +396,32 @@ export class TransferLogStore {
                 metadata.projectName,
                 targetName ? `${targetType}: ${targetName}` : targetType
             ].filter(Boolean)
+            const successCount = Number.isFinite(Number(recoverySummary?.successCount))
+                ? Number(recoverySummary.successCount)
+                : null
+            const failedCount = Number.isFinite(Number(recoverySummary?.failedCount))
+                ? Number(recoverySummary.failedCount)
+                : null
+            const storedSelectedRowCount = recoverySummary?.selectedRowCount !== null &&
+                recoverySummary?.selectedRowCount !== undefined &&
+                Number.isFinite(Number(recoverySummary.selectedRowCount))
+                ? Number(recoverySummary.selectedRowCount)
+                : Array.isArray(recoveryContext?.selectedRowKeys)
+                    ? recoveryContext.selectedRowKeys.length
+                    : null
             return {
                 id: candidate.id,
                 label: labelParts.join(' · ') || candidate.id,
                 recordCount,
                 recordCountKnown: Number.isFinite(recordCount),
+                selectedRowCount: getLogicalSelectedRowCount(
+                    storedSelectedRowCount,
+                    successCount,
+                    failedCount
+                ),
+                successCount,
+                failedCount,
+                summaryKnown: recoverySummaryIsCurrent,
                 sizeBytes: fileStats.size,
                 modifiedAt: fileStats.mtime.toISOString(),
                 invalidLineCount: cachedScan?.invalidLineCount ?? null,
@@ -339,6 +443,113 @@ export class TransferLogStore {
         return sessions
             .filter(Boolean)
             .sort((a, b) => new Date(b.modifiedAt) - new Date(a.modifiedAt))
+    }
+
+    getRecoverySummary(sessionId) {
+        const requestedName = String(sessionId || '')
+        const fileName = basename(requestedName)
+        const isRecoverableFile = fileName === requestedName && (
+            fileName === LEGACY_ACTIVE_FILE_NAME ||
+            fileName === LEGACY_PREVIOUS_FILE_NAME ||
+            (fileName.startsWith(SESSION_FILE_PREFIX) && fileName.endsWith('.jsonl'))
+        )
+        if (!isRecoverableFile) {
+            return Promise.reject(new Error('Invalid recovery session.'))
+        }
+
+        this.writeQueue = this.writeQueue.then(async () => {
+            const filePath = join(this.directory, fileName)
+            if (!await pathIsType(filePath, 'file')) return null
+            const [fileStats, recoverySummary] = await Promise.all([
+                stat(filePath),
+                this.readRecoverySummary(filePath)
+            ])
+            const summaryIsCurrent = Boolean(
+                recoverySummary &&
+                Number.isFinite(Date.parse(recoverySummary.updatedAt)) &&
+                Date.parse(recoverySummary.updatedAt) >= fileStats.mtimeMs - 1000
+            )
+            if (summaryIsCurrent) {
+                return {
+                    ...recoverySummary,
+                    selectedRowCount: getLogicalSelectedRowCount(
+                        recoverySummary.selectedRowCount,
+                        recoverySummary.successCount,
+                        recoverySummary.failedCount
+                    ),
+                    summaryKnown: true
+                }
+            }
+
+            const [scan, recoveryContext] = await Promise.all([
+                this.scanFile(filePath),
+                this.readContext(filePath)
+            ])
+            let successCount = 0
+            let failedCount = 0
+            for (const { record } of scan.records.values()) {
+                const bucket = getStatusBucket(record.status)
+                if (bucket === 'success') successCount += 1
+                if (bucket === 'failed') failedCount += 1
+            }
+            const storedSelectedRowCount = Array.isArray(recoveryContext?.selectedRowKeys)
+                ? recoveryContext.selectedRowKeys.length
+                : Number.isFinite(Number(scan.metadata?.selectedRowCount))
+                    ? Number(scan.metadata.selectedRowCount)
+                    : scan.records.size
+            const selectedRowCount = getLogicalSelectedRowCount(
+                storedSelectedRowCount,
+                successCount,
+                failedCount
+            )
+            const summary = {
+                version: 1,
+                selectedRowCount,
+                successCount,
+                failedCount,
+                updatedAt: new Date().toISOString()
+            }
+            await writeFile(getRecoverySummaryPath(filePath), JSON.stringify(summary), 'utf8')
+            return { ...summary, summaryKnown: true }
+        })
+        return this.writeQueue
+    }
+
+    deleteRecoverySession(sessionId) {
+        const requestedName = String(sessionId || '')
+        const fileName = basename(requestedName)
+        const isRecoverableFile = fileName === requestedName && (
+            fileName === LEGACY_ACTIVE_FILE_NAME ||
+            fileName === LEGACY_PREVIOUS_FILE_NAME ||
+            (fileName.startsWith(SESSION_FILE_PREFIX) && fileName.endsWith('.jsonl'))
+        )
+        if (!isRecoverableFile) {
+            return Promise.reject(new Error('Invalid recovery session.'))
+        }
+
+        this.writeQueue = this.writeQueue.then(async () => {
+            const filePath = join(this.directory, fileName)
+            if (!await pathIsType(filePath, 'file')) {
+                throw new Error('The recovery session no longer exists.')
+            }
+
+            await rm(filePath, { force: true })
+            await rm(getRecoveryContextPath(filePath), { force: true })
+            await rm(getRecoverySummaryPath(filePath), { force: true })
+            await rm(getRecoveryAssetDirectory(filePath), { recursive: true, force: true })
+            this.scanCache.delete(filePath)
+
+            if (filePath === this.filePath) {
+                this.index.clear()
+                this.statusByKey.clear()
+                this.recoveryAssetBatches.clear()
+                this.selectedRowCount = null
+                this.byteOffset = 0
+            }
+
+            return { success: true, sessionId: fileName }
+        })
+        return this.writeQueue
     }
 
     async recover(sessionId = 'latest') {
@@ -381,12 +592,15 @@ export class TransferLogStore {
             } = data || {}
             const sourceDetails = dataWithoutSources.details || {}
             const checkpointDetails = {
+                payload: sourceDetails.payload,
+                response: sourceDetails.response,
                 warnings: Array.isArray(sourceDetails.warnings) ? sourceDetails.warnings : [],
                 executionLog: (sourceDetails.executionLog || []).map(step => ({
                     key: step?.key,
                     step: step?.step,
                     details: step?.details,
-                    status: step?.status
+                    status: step?.status,
+                    raw: step?.raw
                 }))
             }
             const recordInput = {
@@ -402,8 +616,10 @@ export class TransferLogStore {
             await appendFile(this.filePath, line, 'utf8')
             this.scanCache.delete(this.filePath)
             this.index.set(String(key), { offset, length })
+            this.statusByKey.set(String(key), record.status)
             this.recoveryAssetBatches.delete(String(key))
             this.byteOffset += length
+            await this.writeRecoverySummary()
         })
         return this.writeQueue.then(() => ({ success: true }))
     }

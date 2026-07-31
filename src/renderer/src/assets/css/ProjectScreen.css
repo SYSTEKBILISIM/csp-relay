@@ -117,6 +117,33 @@
     font-size: 13px;
 }
 
+.delete-recovery-dialog-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.delete-recovery-dialog-icon {
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: #faad14;
+    font-size: 20px;
+}
+
+.delete-recovery-dialog-title {
+    color: #1e293b;
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.delete-recovery-dialog-description {
+    margin-top: 8px;
+    color: #475569;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
 .project-recovery-summary {
     display: flex;
     justify-content: space-between;
@@ -185,9 +212,35 @@
 }
 
 .project-recovery-item-meta {
-    display: block;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 2px;
     margin-top: 2px;
+    color: #8c8c8c;
     font-size: 11px;
+}
+
+.project-recovery-item-meta > span + span::before {
+    margin-right: 6px;
+    color: #cbd5e1;
+    content: "\00b7";
+}
+
+.project-recovery-stat-selected {
+    color: #2563eb;
+    font-weight: 600;
+}
+
+.project-recovery-stat-success {
+    color: #16a34a;
+    font-weight: 600;
+}
+
+.project-recovery-stat-failed {
+    color: #dc2626;
+    font-weight: 600;
 }
 
 .project-recovery-selection-icon {

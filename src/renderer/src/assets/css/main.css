@@ -414,6 +414,42 @@ select:hover {
     margin-top: 8px !important;
 }
 
+/* Shared spacing and sizing for compact confirmation dialogs */
+.app-confirm-modal .ant-modal-content,
+.app-confirm-modal .ant-modal-container {
+    overflow: hidden;
+    padding: 0 !important;
+    border-radius: 14px;
+}
+
+.app-confirm-modal .ant-modal-confirm-body-wrapper {
+    padding: 20px;
+}
+
+.app-confirm-modal .ant-modal-confirm-body,
+.app-confirm-modal .ant-modal-confirm-paragraph {
+    display: block;
+    max-width: none;
+}
+
+.app-confirm-modal .ant-modal-confirm-content {
+    margin: 0 !important;
+}
+
+.app-confirm-modal .ant-modal-confirm-btns {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+}
+
+.app-confirm-modal .ant-modal-confirm-btns .ant-btn {
+    min-width: 112px;
+    height: 34px;
+    margin-inline-start: 0 !important;
+    border-radius: 9px;
+}
+
 /* Minimalist Pagination Override */
 .ant-pagination .ant-pagination-item-active {
     background: transparent !important;
