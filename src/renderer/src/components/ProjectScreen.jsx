@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Select, Button, Typography, Row, Col, Upload, Tooltip, App, Modal, Empty, Spin, Tag } from 'antd';
-import { ProjectOutlined, PartitionOutlined, BuildOutlined, FileTextOutlined, FileExcelOutlined, InfoCircleOutlined, HistoryOutlined, CheckCircleFilled, InboxOutlined, DeleteOutlined, ExclamationCircleFilled } from '@ant-design/icons';
+import { ProjectOutlined, PartitionOutlined, BuildOutlined, FileTextOutlined, FileExcelOutlined, InfoCircleOutlined, HistoryOutlined, CheckCircleFilled, InboxOutlined, DeleteOutlined, ExclamationCircleFilled, CloseOutlined } from '@ant-design/icons';
 import { globalStore } from '../store/GlobalStore';
 import { parseExcelFile } from '../services/ExcelService';
 import { apiClient } from '../api/client';
@@ -12,6 +12,12 @@ const { Title, Text } = Typography;
 const { Option } = Select;
 const { Dragger } = Upload;
 const LOCAL_RECOVERY_SESSION_ID = '__local_recovery_file__';
+const waitForRecoveryLoadingPaint = () => new Promise(resolve => {
+    const scheduleFrame = typeof window?.requestAnimationFrame === 'function'
+        ? window.requestAnimationFrame.bind(window)
+        : callback => setTimeout(callback, 0);
+    scheduleFrame(() => scheduleFrame(resolve));
+});
 const getSourceFilePath = file => {
     try {
         return window.api?.getPathForFile?.(file) || file?.path || '';
@@ -23,6 +29,78 @@ const formatRecoverySessionSize = sizeBytes => {
     if (!Number.isFinite(sizeBytes)) return 'Saved log';
     if (sizeBytes < 1024 * 1024) return `${Math.max(1, Math.round(sizeBytes / 1024))} KB log`;
     return `${(sizeBytes / (1024 * 1024)).toFixed(sizeBytes >= 100 * 1024 * 1024 ? 0 : 1)} MB log`;
+};
+const getFiniteRecoveryNumber = (...values) => {
+    const value = values.find(item => item !== null && item !== undefined && Number.isFinite(Number(item)));
+    return value === undefined ? null : Number(value);
+};
+const getRecoveryLabel = recovery => {
+    const definition = recovery?.recoveryContext?.definitionData || {};
+    const projectName = recovery?.projectName || definition.projectName;
+    const flowName = recovery?.flowName || definition.flowName;
+    const formName = recovery?.formName || definition.formName;
+    const targetName = flowName || formName;
+    const targetType = flowName ? 'Flow' : formName ? 'Form' : recovery?.transactionType || definition.transactionType;
+    const labelParts = [
+        projectName,
+        targetName ? `${targetType}: ${targetName}` : targetType
+    ].filter(Boolean);
+    return labelParts.join(' · ') || recovery?.sourceFile || 'Recovered transfer';
+};
+const getRecoveryTimestamp = recovery => {
+    const candidates = [
+        recovery?.recoverySummary?.updatedAt,
+        recovery?.recoveryContext?.savedAt,
+        recovery?.exportDate,
+        recovery?.modifiedAt
+    ];
+    const value = candidates.find(candidate => Number.isFinite(Date.parse(candidate)));
+    return value ? new Date(value).toISOString() : new Date().toISOString();
+};
+const getRecoveryDateParts = value => {
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) return { date: 'Date unavailable', time: '' };
+    const date = new Date(timestamp);
+    const locale = globalStore.get('language') || 'tr-TR';
+    return {
+        date: date.toLocaleDateString(locale, { day: '2-digit', month: 'short', year: 'numeric' }),
+        time: date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+    };
+};
+const createUploadedRecoverySession = (json, file) => {
+    const results = Array.isArray(json.results) ? json.results : [];
+    const recoverySummary = json.recoverySummary || {};
+    const stats = json.stats || {};
+    const countedSuccess = results.filter(item => item?.status === 'Success' || item?.status === 'Warning').length;
+    const countedFailed = results.filter(item => item?.status === 'Error' || item?.status === 'ValidationError').length;
+    const successCount = getFiniteRecoveryNumber(recoverySummary.successCount, stats.success, countedSuccess) ?? 0;
+    const failedCount = getFiniteRecoveryNumber(recoverySummary.failedCount, stats.error, countedFailed) ?? 0;
+    const selectedRowCount = getFiniteRecoveryNumber(
+        recoverySummary.selectedRowCount,
+        json.recoveryContext?.selectedRowKeys?.length,
+        stats.total,
+        successCount + failedCount
+    );
+    const modifiedAt = getRecoveryTimestamp(json);
+
+    return {
+        ...json,
+        id: LOCAL_RECOVERY_SESSION_ID,
+        label: getRecoveryLabel({ ...json, sourceFile: file.name }),
+        results,
+        recovered: true,
+        recoverySource: file.name,
+        sourceFile: file.name,
+        sourceKind: 'local',
+        recordCount: results.length,
+        recordCountKnown: true,
+        selectedRowCount,
+        successCount,
+        failedCount,
+        summaryKnown: true,
+        modifiedAt,
+        addedAt: new Date().toISOString()
+    };
 };
 
 const getLocalizedText = (textObj) => {
@@ -94,7 +172,8 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
         setUploadedRecoverySession(null);
         try {
             const sessions = (await logDB.listRecoverable())
-                .filter(session => session.hasRecoveryContext);
+                .filter(session => session.hasRecoveryContext)
+                .sort((a, b) => Date.parse(b.modifiedAt) - Date.parse(a.modifiedAt));
             setRecoverableSessions(sessions);
             setSelectedRecoverySessionId(sessions[0]?.id || null);
             void hydrateRecoverySessionSummaries(sessions);
@@ -109,6 +188,8 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
     const restoreRecoverySession = async (sessionId) => {
         setRecoveringSessionId(sessionId);
         try {
+            // Let React paint the busy state before recovery parsing and Excel hydration begin.
+            await waitForRecoveryLoadingPaint();
             const recovered = sessionId === LOCAL_RECOVERY_SESSION_ID
                 ? uploadedRecoverySession
                 : await logDB.recover(sessionId);
@@ -117,8 +198,8 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                 return;
             }
 
-            setRecoveryModalOpen(false);
             await onRestoreSession?.(recovered);
+            setRecoveryModalOpen(false);
             message.success('Session restored. Opening the transfer screen...');
         } catch (error) {
             message.error(`The session could not be restored: ${error.message}`);
@@ -185,13 +266,7 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                 if (!json.recoveryContext?.definitionData) {
                     throw new Error('The selected file is a log export, not a transfer checkpoint.');
                 }
-                const recovered = {
-                    ...json,
-                    results: Array.isArray(json.results) ? json.results : [],
-                    recovered: true,
-                    recoverySource: file.name,
-                    sourceFile: file.name
-                };
+                const recovered = createUploadedRecoverySession(json, file);
 
                 setUploadedRecoverySession(recovered);
                 setSelectedRecoverySessionId(LOCAL_RECOVERY_SESSION_ID);
@@ -204,6 +279,14 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
         reader.onerror = () => message.error('The selected checkpoint file could not be read.');
         reader.readAsText(file);
         return false;
+    };
+
+    const removeUploadedRecoverySession = event => {
+        event?.stopPropagation();
+        setUploadedRecoverySession(null);
+        if (selectedRecoverySessionId === LOCAL_RECOVERY_SESSION_ID) {
+            setSelectedRecoverySessionId(recoverableSessions[0]?.id || null);
+        }
     };
 
     const fetchProjectDetails = async (projectSecretKey) => {
@@ -529,6 +612,17 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
             }
         }, 1000);
     };
+
+    const recoveryListItems = [
+        ...recoverableSessions.map(session => ({
+            ...session,
+            sourceKind: 'checkpoint',
+            addedAt: session.modifiedAt
+        }))
+    ].sort((a, b) => Date.parse(b.addedAt) - Date.parse(a.addedAt));
+    const uploadedRecoveryDateParts = uploadedRecoverySession
+        ? getRecoveryDateParts(uploadedRecoverySession.modifiedAt)
+        : null;
 
     return (
         <Card
@@ -972,7 +1066,13 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
 
             <Modal
                 open={recoveryModalOpen}
-                onCancel={() => setRecoveryModalOpen(false)}
+                onCancel={() => {
+                    if (recoveringSessionId || deletingRecoverySessionId) return;
+                    setRecoveryModalOpen(false);
+                }}
+                closable={!Boolean(recoveringSessionId || deletingRecoverySessionId)}
+                maskClosable={!Boolean(recoveringSessionId || deletingRecoverySessionId)}
+                keyboard={!Boolean(recoveringSessionId || deletingRecoverySessionId)}
                 footer={[
                     <Button
                         key="cancel"
@@ -1003,10 +1103,10 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                         disabled={!selectedRecoverySessionId || Boolean(deletingRecoverySessionId)}
                         onClick={() => restoreRecoverySession(selectedRecoverySessionId)}
                     >
-                        Restore selected checkpoint
+                        {recoveringSessionId ? 'Preparing transfer...' : 'Restore selected checkpoint'}
                     </Button>
                 ]}
-                width={560}
+                width={620}
                 centered
                 destroyOnHidden
                 className="project-recovery-modal"
@@ -1025,7 +1125,17 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                     </div>
                 </div>
 
-                <Spin spinning={recoverySessionsLoading}>
+                <Spin
+                    spinning={recoverySessionsLoading || Boolean(recoveringSessionId)}
+                    tip={recoveringSessionId
+                        ? 'Preparing transfer screen and reloading Excel data...'
+                        : 'Loading recovery checkpoints...'}
+                    size={recoveringSessionId ? 'large' : 'default'}
+                >
+                    <div
+                        className={`project-recovery-content${recoveringSessionId ? ' is-restoring' : ''}`}
+                        aria-busy={Boolean(recoveringSessionId)}
+                    >
                     {!recoverySessionsLoading && recoverableSessions.length > 0 && (
                         <div className="project-recovery-summary">
                             <Text type="secondary">
@@ -1035,16 +1145,25 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                         </div>
                     )}
                     <div className="project-recovery-list">
-                        {!recoverySessionsLoading && recoverableSessions.length === 0 && !uploadedRecoverySession ? (
+                        {!recoverySessionsLoading && recoveryListItems.length === 0 ? (
                             <Empty
                                 image={Empty.PRESENTED_IMAGE_SIMPLE}
-                                description="No recoverable sessions were found."
+                                description="No saved checkpoints were found."
                             />
                         ) : (
-                            recoverableSessions.map(session => (
+                            recoveryListItems.map(session => {
+                                const isLocalFile = session.sourceKind === 'local';
+                                const processedCount = Number.isFinite(session.successCount) && Number.isFinite(session.failedCount)
+                                    ? session.successCount + session.failedCount
+                                    : session.recordCountKnown
+                                        ? session.recordCount
+                                        : null;
+                                const recoveryDateParts = getRecoveryDateParts(session.modifiedAt);
+
+                                return (
                                 <button
                                     type="button"
-                                    className={`project-recovery-item${selectedRecoverySessionId === session.id ? ' project-recovery-item-selected' : ''}`}
+                                    className={`project-recovery-item${isLocalFile ? ' project-recovery-local-item' : ''}${selectedRecoverySessionId === session.id ? ' project-recovery-item-selected' : ''}`}
                                     key={session.id}
                                     onClick={() => setSelectedRecoverySessionId(session.id)}
                                     disabled={Boolean(recoveringSessionId || deletingRecoverySessionId)}
@@ -1054,73 +1173,123 @@ export const ProjectScreen = ({ onFinish, onRestoreSession, deployAgents = [], i
                                             <Text strong ellipsis className="project-recovery-item-title">
                                                 {session.label}
                                             </Text>
-                                            {session.hasRecoveryContext && (
-                                                <Tag color="blue" bordered={false}>Checkpoint</Tag>
-                                            )}
                                         </div>
-                                        <div className="project-recovery-item-meta">
-                                            <span>
-                                                {session.recordCountKnown
-                                                    ? `${session.recordCount} total`
-                                                    : formatRecoverySessionSize(session.sizeBytes)}
+                                        <div className="project-recovery-item-metrics">
+                                            <span className="project-recovery-metric">
+                                                <strong>
+                                                    {Number.isFinite(processedCount) ? processedCount : formatRecoverySessionSize(session.sizeBytes)}
+                                                    {Number.isFinite(session.selectedRowCount) ? ` / ${session.selectedRowCount}` : ''}
+                                                </strong>
+                                                <span className="project-recovery-metric-label">processed</span>
                                             </span>
-                                            {Number.isFinite(session.selectedRowCount) && (
-                                                <span className="project-recovery-stat-selected">
-                                                    Selected {session.selectedRowCount}
-                                                </span>
-                                            )}
-                                            <span className="project-recovery-stat-success">
-                                                Success {session.summaryKnown ? session.successCount : '…'}
+                                            <span className="project-recovery-metric project-recovery-stat-success">
+                                                <strong>{session.summaryKnown ? session.successCount : '…'}</strong>
+                                                <span className="project-recovery-metric-label">success</span>
                                             </span>
-                                            <span className="project-recovery-stat-failed">
-                                                Failed {session.summaryKnown ? session.failedCount : '…'}
+                                            <span className="project-recovery-metric project-recovery-stat-failed">
+                                                <strong>{session.summaryKnown ? session.failedCount : '…'}</strong>
+                                                <span className="project-recovery-metric-label">failed</span>
                                             </span>
-                                            <span>{new Date(session.modifiedAt).toLocaleString()}</span>
                                         </div>
+                                    </div>
+                                    <div className="project-recovery-item-timestamp">
+                                        <span className="project-recovery-item-date">{recoveryDateParts.date}</span>
+                                        <span className="project-recovery-item-time">{recoveryDateParts.time}</span>
                                     </div>
                                     <CheckCircleFilled className="project-recovery-selection-icon" />
                                 </button>
-                            ))
-                        )}
-                        {uploadedRecoverySession && (
-                            <button
-                                type="button"
-                                className={`project-recovery-item project-recovery-local-item${selectedRecoverySessionId === LOCAL_RECOVERY_SESSION_ID ? ' project-recovery-item-selected' : ''}`}
-                                onClick={() => setSelectedRecoverySessionId(LOCAL_RECOVERY_SESSION_ID)}
-                                disabled={Boolean(recoveringSessionId || deletingRecoverySessionId)}
-                            >
-                                <div className="project-recovery-item-info">
-                                    <div className="project-recovery-item-heading">
-                                        <Text strong ellipsis className="project-recovery-item-title">
-                                            {uploadedRecoverySession.sourceFile}
-                                        </Text>
-                                        <Tag color="cyan" bordered={false}>Local file</Tag>
-                                    </div>
-                                    <Text type="secondary" className="project-recovery-item-meta">
-                                        {uploadedRecoverySession.results.length} processed rows
-                                    </Text>
-                                </div>
-                                <CheckCircleFilled className="project-recovery-selection-icon" />
-                            </button>
+                                );
+                            })
                         )}
                     </div>
-                </Spin>
 
-                <div className="project-recovery-upload-section">
-                    <Text className="project-recovery-upload-label">Or load an exported checkpoint</Text>
-                    <Dragger
-                        accept=".json,application/json"
-                        multiple={false}
-                        beforeUpload={handleRecoveryFileUpload}
-                        showUploadList={false}
-                        className="project-recovery-dragger"
-                    >
-                        <InboxOutlined className="project-recovery-upload-icon" />
-                        <span className="project-recovery-upload-text">
-                            Drop a checkpoint JSON here, or click to browse
-                        </span>
-                    </Dragger>
-                </div>
+                    <div className="project-recovery-upload-section">
+                    <Text className="project-recovery-upload-label">
+                        {uploadedRecoverySession ? 'Loaded local checkpoint' : 'Or load an exported checkpoint'}
+                    </Text>
+                    {uploadedRecoverySession ? (
+                        <div
+                            className={`project-recovery-item project-recovery-local-item project-recovery-uploaded-card${selectedRecoverySessionId === LOCAL_RECOVERY_SESSION_ID ? ' project-recovery-item-selected' : ''}`}
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => setSelectedRecoverySessionId(LOCAL_RECOVERY_SESSION_ID)}
+                            onKeyDown={event => {
+                                if (event.key === 'Enter' || event.key === ' ') {
+                                    event.preventDefault();
+                                    setSelectedRecoverySessionId(LOCAL_RECOVERY_SESSION_ID);
+                                }
+                            }}
+                        >
+                            <div className="project-recovery-item-info">
+                                <div className="project-recovery-item-heading">
+                                    <Text strong ellipsis className="project-recovery-item-title">
+                                        {uploadedRecoverySession.label}
+                                    </Text>
+                                    <Tag color="cyan" bordered={false}>Local file</Tag>
+                                </div>
+                                <div className="project-recovery-item-source-row">
+                                    <Text
+                                        type="secondary"
+                                        ellipsis
+                                        className="project-recovery-item-source"
+                                        title={uploadedRecoverySession.sourceFile}
+                                    >
+                                        {uploadedRecoverySession.sourceFile}
+                                    </Text>
+                                </div>
+                                <div className="project-recovery-item-metrics">
+                                    <span className="project-recovery-metric">
+                                        <strong>
+                                            {uploadedRecoverySession.successCount + uploadedRecoverySession.failedCount}
+                                            {Number.isFinite(uploadedRecoverySession.selectedRowCount) ? ` / ${uploadedRecoverySession.selectedRowCount}` : ''}
+                                        </strong>
+                                        <span className="project-recovery-metric-label">processed</span>
+                                    </span>
+                                    <span className="project-recovery-metric project-recovery-stat-success">
+                                        <strong>{uploadedRecoverySession.successCount}</strong>
+                                        <span className="project-recovery-metric-label">success</span>
+                                    </span>
+                                    <span className="project-recovery-metric project-recovery-stat-failed">
+                                        <strong>{uploadedRecoverySession.failedCount}</strong>
+                                        <span className="project-recovery-metric-label">failed</span>
+                                    </span>
+                                </div>
+                            </div>
+                            <div className="project-recovery-item-timestamp">
+                                <span className="project-recovery-item-date">{uploadedRecoveryDateParts.date}</span>
+                                <span className="project-recovery-item-time">{uploadedRecoveryDateParts.time}</span>
+                            </div>
+                            <div className="project-recovery-uploaded-actions">
+                                <Tooltip title="Remove local checkpoint">
+                                    <Button
+                                        type="text"
+                                        size="small"
+                                        className="project-recovery-remove-upload"
+                                        icon={<CloseOutlined />}
+                                        aria-label="Remove local checkpoint"
+                                        onClick={removeUploadedRecoverySession}
+                                    />
+                                </Tooltip>
+                                <CheckCircleFilled className="project-recovery-selection-icon" />
+                            </div>
+                        </div>
+                    ) : (
+                        <Dragger
+                            accept=".json,application/json"
+                            multiple={false}
+                            beforeUpload={handleRecoveryFileUpload}
+                            showUploadList={false}
+                            className="project-recovery-dragger"
+                        >
+                            <InboxOutlined className="project-recovery-upload-icon" />
+                            <span className="project-recovery-upload-text">
+                                Drop a checkpoint JSON here, or click to browse
+                            </span>
+                        </Dragger>
+                    )}
+                    </div>
+                    </div>
+                </Spin>
             </Modal>
         </Card>
     );

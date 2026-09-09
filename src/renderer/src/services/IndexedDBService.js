@@ -82,6 +82,26 @@ class FileLogService {
         return this.api.exportJson(metadata, suggestedName)
     }
 
+    async exportRecovery(metadata, suggestedName, fallbackData) {
+        if (!this.api) throw new Error('File log API is unavailable.')
+        if (typeof this.api.exportRecovery === 'function') {
+            try {
+                return await this.api.exportRecovery(metadata, suggestedName)
+            } catch (error) {
+                const handlerUnavailable = /no handler registered|handler.*not.*registered/i.test(error?.message || '')
+                if (!handlerUnavailable || !fallbackData || typeof this.api.exportDataJson !== 'function') {
+                    throw error
+                }
+
+                return this.api.exportDataJson(fallbackData, suggestedName)
+            }
+        }
+        if (fallbackData && typeof this.api.exportDataJson === 'function') {
+            return this.api.exportDataJson(fallbackData, suggestedName)
+        }
+        throw new Error('Recovery export is unavailable. Restart the application and try again.')
+    }
+
     async exportDataJson(data, suggestedName) {
         if (!this.api) throw new Error('File log API is unavailable.')
         return this.api.exportDataJson(data, suggestedName)

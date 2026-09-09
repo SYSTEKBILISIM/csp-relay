@@ -214,6 +214,16 @@ app.whenReady().then(async () => {
         if (result.canceled || !result.filePath) return { success: false, canceled: true }
         return transferLogStore.exportJson(result.filePath, metadata)
     })
+    ipcMain.handle('transfer-log:export-recovery', async (_event, { metadata, suggestedName }) => {
+        await transferLogReady
+        const result = await dialog.showSaveDialog({
+            title: 'Export Transfer Recovery',
+            defaultPath: join(app.getPath('downloads'), suggestedName || `CSP_Relay_Recovery_${Date.now()}.json`),
+            filters: [{ name: 'CSP Relay Recovery', extensions: ['json'] }]
+        })
+        if (result.canceled || !result.filePath) return { success: false, canceled: true }
+        return transferLogStore.exportRecovery(result.filePath, metadata)
+    })
     ipcMain.handle('transfer-log:export-data-json', async (_event, { data, suggestedName }) => {
         await transferLogReady
         const result = await dialog.showSaveDialog({

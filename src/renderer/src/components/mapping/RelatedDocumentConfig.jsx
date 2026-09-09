@@ -1,153 +1,214 @@
 import React from 'react';
-import { Form, Select, Typography, Tag } from 'antd';
+import { Form, Select, Typography, Segmented, theme } from 'antd';
 import {
-    ArrowRightOutlined,
     FileExcelOutlined,
     FileOutlined,
     FolderOpenOutlined,
-    InfoCircleOutlined
+    LinkOutlined,
+    PaperClipOutlined,
+    TableOutlined
 } from '@ant-design/icons';
 
 const { Text } = Typography;
 
-/**
- * Config UI for RelatedDocument type objects.
- * The user selects which Excel column contains the local file path and optional CSP save path for this row.
- * At execution time, the app reads the file and sends Name, Extension, Data (base64).
- */
-export const RelatedDocumentConfig = ({ form, excelColumns = [] }) => {
-    const pathColumn = Form.useWatch('pathCol', form);
-    const savePathColumn = Form.useWatch('savePathCol', form);
-    const columnOptions = React.useMemo(() => (
-        (excelColumns || [])
-            .filter(col => col !== undefined && col !== null && col !== '')
-            .map(col => ({ value: col, label: col }))
-    ), [excelColumns]);
+const toColumnOptions = columns => (columns || [])
+    .filter(column => column !== undefined && column !== null && column !== '')
+    .map(column => ({ value: column, label: column }));
 
-    const flowNodeStyle = {
-        flex: 1,
-        minWidth: 0,
-        padding: '10px 12px',
-        borderRadius: 8,
-        background: '#fff',
-        border: '1px solid #e2e8f0'
+/**
+ * Config UI for RelatedDocument objects.
+ * A document can be read from the current main row, or multiple document rows can
+ * be collected from another sheet by matching a main key to a parent/detail key.
+ */
+export const RelatedDocumentConfig = ({
+    form,
+    excelColumns = [],
+    sheetColumns,
+    mainSheet,
+    mainIdColumn
+}) => {
+    const { token } = theme.useToken();
+    const sourceMode = Form.useWatch('relatedDocumentSource', form) || 'MainSheet';
+    const relatedSheet = Form.useWatch('relatedSheet', form);
+
+    const mainColumnOptions = React.useMemo(() => toColumnOptions(excelColumns), [excelColumns]);
+    const relatedColumnOptions = React.useMemo(
+        () => toColumnOptions(relatedSheet ? sheetColumns?.[relatedSheet] : []),
+        [relatedSheet, sheetColumns]
+    );
+    const sourceColumnOptions = sourceMode === 'RelatedSheet' ? relatedColumnOptions : mainColumnOptions;
+    const relatedSheetOptions = React.useMemo(() => (
+        Object.keys(sheetColumns || {})
+            .filter(sheet => sheet !== mainSheet)
+            .map(sheet => ({ value: sheet, label: sheet }))
+    ), [sheetColumns, mainSheet]);
+    const supportsRelatedSheet = relatedSheetOptions.length > 0;
+
+    const handleSourceChange = nextMode => {
+        form.setFieldsValue({
+            relatedDocumentSource: nextMode,
+            relatedSheet: undefined,
+            detailKey: undefined,
+            pathCol: undefined,
+            savePathCol: undefined,
+            masterKey: nextMode === 'RelatedSheet' ? (mainIdColumn || undefined) : undefined
+        });
     };
 
     return (
-        <div style={{ animation: 'fadeIn 0.3s', padding: '0 8px 4px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingBottom: 14, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
+        <div
+            style={{
+                animation: 'fadeIn 0.2s',
+                padding: 20,
+                borderRadius: token.borderRadiusLG + 4,
+                background: token.colorFillAlter,
+                border: `1px solid ${token.colorBorderSecondary}`
+            }}
+        >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, marginBottom: 18 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <div style={{ width: 34, height: 34, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 9, color: '#0284c7', background: '#e0f2fe' }}>
-                        <FileOutlined style={{ fontSize: 17 }} />
+                    <div
+                        style={{
+                            width: 36,
+                            height: 36,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            flex: '0 0 auto',
+                            borderRadius: token.borderRadiusLG,
+                            color: token.colorPrimary,
+                            background: token.colorPrimaryBg
+                        }}
+                    >
+                        <PaperClipOutlined style={{ fontSize: 17 }} />
                     </div>
                     <div>
-                        <Text strong style={{ display: 'block', fontSize: 14, color: '#0f172a' }}>Related Document Source</Text>
-                        <Text type="secondary" style={{ fontSize: 11 }}>Map the local file and its optional CSP destination.</Text>
+                        <Text strong style={{ display: 'block', fontSize: 15 }}>Related Document</Text>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                            {sourceMode === 'RelatedSheet' ? 'Multiple files from a related sheet' : 'File data from the main sheet'}
+                        </Text>
                     </div>
                 </div>
-                <Tag color="blue" style={{ margin: 0, borderRadius: 10, fontSize: 10 }}>2-STEP MAPPING</Tag>
+
+                {supportsRelatedSheet && (
+                    <Form.Item name="relatedDocumentSource" style={{ width: 330, marginBottom: 0 }}>
+                        <Segmented
+                            block
+                            options={[
+                                { label: 'Main sheet', value: 'MainSheet', icon: <FileExcelOutlined /> },
+                                { label: 'Related sheet', value: 'RelatedSheet', icon: <TableOutlined /> }
+                            ]}
+                            onChange={handleSourceChange}
+                        />
+                    </Form.Item>
+                )}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 12px', marginBottom: 16, borderRadius: 8, color: '#475569', background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                <InfoCircleOutlined style={{ marginTop: 2, color: '#0284c7' }} />
-                <Text style={{ fontSize: 12, color: 'inherit' }}>
-                    Select the Excel column containing each file's absolute local path. Choose a save-path column only when the CSP folder changes by row.
-                </Text>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 14 }}>
-                <div style={{ padding: 16, borderRadius: 10, background: '#f8fbff', border: '1px solid #bae0ff' }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 14 }}>
-                        <div style={{ flex: '0 0 auto', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', color: '#fff', background: '#1677ff', fontSize: 12, fontWeight: 700 }}>1</div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 7 }}>
-                                <Text strong style={{ color: '#0f172a' }}>Local file path</Text>
-                                <Tag color="blue" style={{ margin: 0, borderRadius: 8, fontSize: 10 }}>REQUIRED</Tag>
-                            </div>
-                            <Text type="secondary" style={{ display: 'block', marginTop: 3, fontSize: 11 }}>
-                                Absolute path used to read the document from this computer.
-                            </Text>
-                        </div>
+            {sourceMode === 'RelatedSheet' && supportsRelatedSheet && (
+                <div
+                    style={{
+                        padding: 16,
+                        marginBottom: 14,
+                        borderRadius: token.borderRadiusLG,
+                        background: token.colorBgContainer,
+                        border: `1px solid ${token.colorBorderSecondary}`,
+                        boxShadow: token.boxShadowTertiary
+                    }}
+                >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                        <LinkOutlined style={{ color: token.colorPrimary }} />
+                        <Text strong>Sheet relation</Text>
                     </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr 1fr', gap: 12 }}>
+                        <Form.Item
+                            name="relatedSheet"
+                            label="Related sheet"
+                            rules={[{ required: true, message: 'Please select the related document sheet' }]}
+                            style={{ marginBottom: 0 }}
+                        >
+                            <Select
+                                options={relatedSheetOptions}
+                                placeholder="Select sheet"
+                                showSearch
+                                optionFilterProp="label"
+                                variant="filled"
+                                onChange={() => form.setFieldsValue({ detailKey: undefined, pathCol: undefined, savePathCol: undefined })}
+                            />
+                        </Form.Item>
+                        <Form.Item
+                            name="masterKey"
+                            label="Main ID column"
+                            rules={[{ required: true, message: 'Please select the main sheet ID column' }]}
+                            style={{ marginBottom: 0 }}
+                        >
+                            <Select options={mainColumnOptions} placeholder="ID" showSearch optionFilterProp="label" variant="filled" />
+                        </Form.Item>
+                        <Form.Item
+                            name="detailKey"
+                            label="Parent ID column"
+                            rules={[{ required: true, message: 'Please select the parent ID column' }]}
+                            style={{ marginBottom: 0 }}
+                        >
+                            <Select
+                                options={relatedColumnOptions}
+                                placeholder="PARENTID"
+                                showSearch
+                                optionFilterProp="label"
+                                variant="filled"
+                                disabled={!relatedSheet}
+                            />
+                        </Form.Item>
+                    </div>
+                </div>
+            )}
 
+            <div
+                style={{
+                    padding: 16,
+                    borderRadius: token.borderRadiusLG,
+                    background: token.colorBgContainer,
+                    border: `1px solid ${token.colorBorderSecondary}`,
+                    boxShadow: token.boxShadowTertiary
+                }}
+            >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                    <FileOutlined style={{ color: token.colorPrimary }} />
+                    <Text strong>File columns</Text>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 14 }}>
                     <Form.Item
                         name="pathCol"
-                        label={<Text strong style={{ fontSize: 12 }}>Excel column</Text>}
+                        label={<Text strong>Local file path</Text>}
                         rules={[{ required: true, message: 'Please select the file path column' }]}
                         style={{ marginBottom: 0 }}
                     >
                         <Select
-                            options={columnOptions}
-                            placeholder="Select the file path column"
+                            options={sourceColumnOptions}
+                            placeholder="Select path column"
                             showSearch
                             optionFilterProp="label"
-                            style={{ width: '100%' }}
+                            variant="filled"
+                            suffixIcon={<FileExcelOutlined style={{ color: token.colorTextQuaternary }} />}
+                            disabled={sourceMode === 'RelatedSheet' && !relatedSheet}
                         />
                     </Form.Item>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, color: '#64748b' }}>
-                        <FileExcelOutlined style={{ color: '#16a34a' }} />
-                        <Text type="secondary" style={{ fontSize: 11 }}>Example value: C:\Files\invoice.pdf</Text>
-                    </div>
-                </div>
-
-                <div style={{ padding: 16, borderRadius: 10, background: '#fff', border: '1px solid #e2e8f0' }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 14 }}>
-                        <div style={{ flex: '0 0 auto', width: 28, height: 28, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', color: '#475569', background: '#e2e8f0', fontSize: 12, fontWeight: 700 }}>2</div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 7 }}>
-                                <Text strong style={{ color: '#0f172a' }}>CSP save folder</Text>
-                                <Tag style={{ margin: 0, borderRadius: 8, fontSize: 10, color: '#64748b' }}>OPTIONAL</Tag>
-                            </div>
-                            <Text type="secondary" style={{ display: 'block', marginTop: 3, fontSize: 11 }}>
-                                Dynamic target folder. Leave empty to use the control's default path.
-                            </Text>
-                        </div>
-                    </div>
-
                     <Form.Item
                         name="savePathCol"
-                        label={<Text strong style={{ fontSize: 12 }}>Excel column</Text>}
+                        label={<Text strong>CSP folder <Text type="secondary" style={{ fontWeight: 400 }}>(optional)</Text></Text>}
                         style={{ marginBottom: 0 }}
                     >
                         <Select
                             allowClear
-                            options={columnOptions}
-                            placeholder="Use the default CSP folder"
+                            options={sourceColumnOptions}
+                            placeholder="Use default folder"
                             showSearch
                             optionFilterProp="label"
-                            style={{ width: '100%' }}
+                            variant="filled"
+                            suffixIcon={<FolderOpenOutlined style={{ color: token.colorTextQuaternary }} />}
+                            disabled={sourceMode === 'RelatedSheet' && !relatedSheet}
                         />
                     </Form.Item>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, color: '#64748b' }}>
-                        <FolderOpenOutlined style={{ color: '#d97706' }} />
-                        <Text type="secondary" style={{ fontSize: 11 }}>Example value: DOCUMENTS/ABC</Text>
-                    </div>
-                </div>
-            </div>
-
-            <div style={{ marginTop: 14, padding: '12px 14px', borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                <Text strong style={{ display: 'block', marginBottom: 9, fontSize: 11, color: '#64748b', letterSpacing: 0.4 }}>UPLOAD FLOW</Text>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                    <div style={flowNodeStyle}>
-                        <Text type="secondary" style={{ display: 'block', fontSize: 10 }}>EXCEL SOURCE</Text>
-                        <Text ellipsis style={{ display: 'block', fontSize: 12, color: pathColumn ? '#0f172a' : '#94a3b8' }}>
-                            {pathColumn || 'Select file path column'}
-                        </Text>
-                    </div>
-                    <ArrowRightOutlined style={{ flex: '0 0 auto', color: '#94a3b8' }} />
-                    <div style={{ ...flowNodeStyle, flex: '0 0 130px', textAlign: 'center', color: '#0369a1', background: '#f0f9ff', borderColor: '#bae6fd' }}>
-                        <FileOutlined style={{ marginRight: 6 }} />
-                        <Text strong style={{ fontSize: 12, color: 'inherit' }}>Read file</Text>
-                    </div>
-                    <ArrowRightOutlined style={{ flex: '0 0 auto', color: '#94a3b8' }} />
-                    <div style={flowNodeStyle}>
-                        <Text type="secondary" style={{ display: 'block', fontSize: 10 }}>CSP DESTINATION</Text>
-                        <Text ellipsis style={{ display: 'block', fontSize: 12, color: savePathColumn ? '#0f172a' : '#64748b' }}>
-                            {savePathColumn || 'Control default folder'}
-                        </Text>
-                    </div>
                 </div>
             </div>
         </div>

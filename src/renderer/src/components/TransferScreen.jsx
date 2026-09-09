@@ -15,7 +15,7 @@ import { ParametersModal } from './ParametersModal';
 import { MappingConfigModal } from './mapping/MappingConfigModal';
 import { ResizableTitle } from './ResizableTitle';
 
-export const TransferScreen = ({ onFinish, initialData }) => {
+export const TransferScreen = ({ onFinish, onDraftChange, initialData }) => {
     const [form] = Form.useForm();
     const [messageApi, contextHolder] = message.useMessage();
     const [loading, setLoading] = useState(false);
@@ -72,6 +72,7 @@ export const TransferScreen = ({ onFinish, initialData }) => {
     const [apiMatchThreshold, setApiMatchThreshold] = useState(0.9);
     const [apiCacheLimit, setApiCacheLimit] = useState(50);
     const [relatedGridChunkSize, setRelatedGridChunkSize] = useState(5);
+    const definitionDraftRef = useRef(null);
     const [isParamsModalVisible, setIsParamsModalVisible] = useState(false);
     const [draggedOverIndex, setDraggedOverIndex] = useState(-1);
 
@@ -228,6 +229,46 @@ export const TransferScreen = ({ onFinish, initialData }) => {
         apiCacheLimit,
         relatedGridChunkSize
     ]);
+
+    // Section navigation unmounts this screen. Keep the in-progress definition
+    // in App state before that happens so returning from Setup restores it.
+    useEffect(() => {
+        definitionDraftRef.current = {
+            ...form.getFieldsValue(true),
+            objects,
+            mainSheet,
+            mainIdColumn,
+            documentIdColumn,
+            localPathColumn,
+            cspPathColumn,
+            flowParams,
+            formParams,
+            loginAsEnabled,
+            loginAsColumn,
+            apiMatchThreshold,
+            apiCacheLimit,
+            relatedGridChunkSize
+        };
+    }, [
+        form,
+        mainSheet,
+        mainIdColumn,
+        documentIdColumn,
+        localPathColumn,
+        cspPathColumn,
+        objects,
+        flowParams,
+        formParams,
+        loginAsEnabled,
+        loginAsColumn,
+        apiMatchThreshold,
+        apiCacheLimit,
+        relatedGridChunkSize
+    ]);
+
+    useEffect(() => () => {
+        onDraftChange?.(definitionDraftRef.current);
+    }, [onDraftChange]);
 
     // Helper functions removed as they are now in the hook
 
@@ -435,12 +476,19 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                         ? <Tag color="purple" style={{ margin: 0 }}>Grid Configured</Tag>
                         : <Tag color="warning" style={{ margin: 0 }}>Grid Setup Needed</Tag>;
                 } else if (record.type === 'RelatedDocument') {
-                    summaryNode = mapping.pathCol
+                    const usesRelatedSheet = mapping.relatedDocumentSource === 'RelatedSheet';
+                    summaryNode = mapping.pathCol && (!usesRelatedSheet || (mapping.relatedSheet && mapping.detailKey))
                         ? (
-                            <Tooltip title={`File: ${mapping.pathCol}${mapping.savePathCol ? ` | Save Path: ${mapping.savePathCol}` : ''}`} mouseEnterDelay={0.3}>
+                            <Tooltip title={usesRelatedSheet
+                                ? `Sheet: ${mapping.relatedSheet} | ${mapping.masterKey || mainIdColumn} = ${mapping.detailKey} | File: ${mapping.pathCol}${mapping.savePathCol ? ` | Save Path: ${mapping.savePathCol}` : ''}`
+                                : `File: ${mapping.pathCol}${mapping.savePathCol ? ` | Save Path: ${mapping.savePathCol}` : ''}`
+                            } mouseEnterDelay={0.3}>
                                 <Tag color="purple" style={{ margin: 0 }}>
                                     <span style={{ maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
-                                        File: {mapping.pathCol}{mapping.savePathCol ? ` / Path: ${mapping.savePathCol}` : ''}
+                                        {usesRelatedSheet
+                                            ? `${mapping.relatedSheet}: ${mapping.detailKey} / ${mapping.pathCol}`
+                                            : `File: ${mapping.pathCol}${mapping.savePathCol ? ` / Path: ${mapping.savePathCol}` : ''}`
+                                        }
                                     </span>
                                 </Tag>
                             </Tooltip>
@@ -490,7 +538,14 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                     }
                 }
 
-                return <div className="tag-nowrap">{summaryNode}</div>;
+                return (
+                    <div className="tag-nowrap">
+                        <Space size={4}>
+                            {summaryNode}
+                            {mapping.requiredValue === true && <Tag color="red" style={{ margin: 0 }}>Required</Tag>}
+                        </Space>
+                    </div>
+                );
             }
         },
         {
@@ -854,6 +909,8 @@ export const TransferScreen = ({ onFinish, initialData }) => {
                     type={currentObjectType}
                     sheetColumns={sheetColumns}
                     currentColumns={currentColumns}
+                    mainSheet={mainSheet}
+                    mainIdColumn={mainIdColumn}
                     mainFormFields={objects.map(({ name, type }) => ({ name, type }))}
                     currentFormName={currentObjectName}
                     title="Configure Object Mapping"

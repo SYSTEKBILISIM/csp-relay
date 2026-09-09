@@ -278,7 +278,7 @@ export const MappingFields = ({
                 marginBottom: 16
             }}>
                 <Row gutter={16} align="bottom">
-                    <Col span={10}>
+                    <Col span={8}>
                         <Form.Item
                             name={getName("source")}
                             label={<Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Mapping Mode</Text>}
@@ -307,7 +307,29 @@ export const MappingFields = ({
                             />
                         </Form.Item>
                     </Col>
-                    <Col span={6}>
+                    <Col span={5}>
+                        <Form.Item
+                            name={getName("dataType")}
+                            label={<Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Type</Text>}
+                            rules={[{ required: true, message: 'Please select Target Type' }]}
+                            style={{ marginBottom: 0 }}
+                        >
+                            <Select
+                                placeholder="Type"
+                                variant="filled"
+                                style={{ borderRadius: 8, width: '100%', height: 32 }}
+                                size="middle"
+                                options={[
+                                    { label: 'String', value: 'String' },
+                                    { label: 'Integer', value: 'Integer' },
+                                    { label: 'Decimal', value: 'Decimal' },
+                                    { label: 'Date', value: 'Date' },
+                                    { label: 'Boolean', value: 'Boolean' }
+                                ]}
+                            />
+                        </Form.Item>
+                    </Col>
+                    <Col span={5}>
                         <Form.Item
                             name={getName("isArray")}
                             label={
@@ -346,25 +368,33 @@ export const MappingFields = ({
                             />
                         </Form.Item>
                     </Col>
-                    <Col span={8}>
+                    <Col span={6}>
                         <Form.Item
-                            name={getName("dataType")}
-                            label={<Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Target Type</Text>}
-                            rules={[{ required: true, message: 'Please select Target Type' }]}
+                            name={getName("requiredValue")}
+                            label={
+                                <Space size={4}>
+                                    <Text strong style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Validation</Text>
+                                    <Popover
+                                        content={<Text style={{ fontSize: 12 }}>Stops the row when the mapped value is empty or an API lookup has no match.</Text>}
+                                        trigger="hover"
+                                        placement="topRight"
+                                    >
+                                        <InfoCircleOutlined style={{ fontSize: 10, color: '#94a3b8', cursor: 'help' }} />
+                                    </Popover>
+                                </Space>
+                            }
+                            initialValue={false}
                             style={{ marginBottom: 0 }}
                         >
-                            <Select
-                                placeholder="Type"
-                                variant="filled"
-                                style={{ borderRadius: 8, width: '100%', height: 32 }}
+                            <Segmented
+                                block
                                 size="middle"
                                 options={[
-                                    { label: 'String', value: 'String' },
-                                    { label: 'Integer', value: 'Integer' },
-                                    { label: 'Decimal', value: 'Decimal' },
-                                    { label: 'Date', value: 'Date' },
-                                    { label: 'Boolean', value: 'Boolean' }
+                                    { label: 'Optional', value: false },
+                                    { label: 'Required', value: true }
                                 ]}
+                                style={{ height: 32, display: 'flex', alignItems: 'center' }}
+                                onChange={value => formInstance.setFieldValue(getName('requiredValue'), value)}
                             />
                         </Form.Item>
                     </Col>

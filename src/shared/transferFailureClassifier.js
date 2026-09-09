@@ -11,6 +11,21 @@ const stringifyFailure = value => {
     }
 }
 
+const getServerFailureMessage = error => {
+    const responseText = stringifyFailure(error?.rawResponse)
+    if (!responseText) return null
+
+    if (
+        /Execution Timeout Expired/i.test(responseText) ||
+        /timeout period elapsed prior to completion of the operation/i.test(responseText) ||
+        /Microsoft\.Data\.SqlClient\.SqlException[\s\S]*Error Number:\s*-2/i.test(responseText)
+    ) {
+        return 'The Synergy server timed out while saving the workflow (database execution timeout). The row remains failed and can be retried after the server/database load is resolved.'
+    }
+
+    return null
+}
+
 export const getErrorHttpStatus = error => {
     if (Number.isFinite(error?.status)) return error.status
     const match = /\bHTTP\s+(\d{3})\b/i.exec(String(error?.message || ''))
@@ -67,7 +82,8 @@ export const getNetworkFailureMessage = error => {
 
 export const getTransferFailureMessage = error => {
     if (isExpiredSynergySessionFailure(error)) return getSessionExpiryMessage()
-    return getHttpStatusMessage(getErrorHttpStatus(error)) ||
+    return getServerFailureMessage(error) ||
+        getHttpStatusMessage(getErrorHttpStatus(error)) ||
         getNetworkFailureMessage(error) ||
         error?.message ||
         'Network/Processing Error'

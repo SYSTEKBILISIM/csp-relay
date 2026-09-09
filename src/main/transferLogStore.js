@@ -778,6 +778,44 @@ export class TransferLogStore {
         return { success: true, filePath: destinationPath }
     }
 
+    async exportRecovery(destinationPath, metadata = {}) {
+        await this.writeQueue
+        await mkdir(dirname(destinationPath), { recursive: true })
+
+        const scan = await this.scanFile(this.filePath)
+        const recoveryContext = await this.readContext(this.filePath)
+        if (!recoveryContext?.definitionData) {
+            throw new Error('The active transfer does not have a recovery checkpoint.')
+        }
+
+        const results = [...scan.records.values()]
+            .sort((a, b) => a.location.offset - b.location.offset)
+            .map(value => value.record)
+        const recoverySummary = await this.readRecoverySummary(this.filePath)
+            || this.getCurrentRecoverySummary()
+
+        const recoveryPackage = {
+            fileType: 'csp-relay-transfer-recovery',
+            formatVersion: 1,
+            ...scan.metadata,
+            ...optimizeLogValue(metadata),
+            recoveryContext,
+            recoverySummary,
+            recovered: true,
+            recoverySource: basename(this.filePath),
+            exportDate: new Date().toISOString(),
+            results
+        }
+
+        await writeFile(destinationPath, JSON.stringify(recoveryPackage), 'utf8')
+        return {
+            success: true,
+            filePath: destinationPath,
+            recordCount: results.length,
+            selectedRowCount: recoverySummary.selectedRowCount
+        }
+    }
+
     async exportDataJson(destinationPath, data = {}) {
         await mkdir(dirname(destinationPath), { recursive: true })
         const { results = [], ...metadata } = data

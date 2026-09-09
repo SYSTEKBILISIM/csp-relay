@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ConfigProvider, Layout, theme, App as AntApp } from 'antd';
 import { DomainScreen } from './components/DomainScreen';
@@ -21,6 +21,7 @@ function App() {
     const [current, setCurrent] = useState(0); // 0: Domain, 1: Login, 2: Project, 3: Definition, 4: Execute
     const [config, setConfig] = useState(null);
     const [deployAgents, setDeployAgents] = useState([]);
+    const [projectScreenSession, setProjectScreenSession] = useState(0);
     const [isTransferring, setIsTransferring] = useState(false); // Controls navigation lock
     const [logViewerOrigin, setLogViewerOrigin] = useState(0);
 
@@ -52,12 +53,35 @@ function App() {
 
     const handleLogin = (data) => {
         console.log('Login success:', data);
-        if (data.deployAgents) {
-            setDeployAgents(data.deployAgents);
-        }
+        setDeployAgents(Array.isArray(data.deployAgents) ? data.deployAgents : []);
+
+        // Project, flow, form, and deploy-agent values are scoped to the CSP
+        // environment that was just authenticated. Keeping them after a new
+        // login can make Setup display an identically named item from the
+        // previous environment and later send the transfer to its old URL.
+        [
+            'deployAgent',
+            'deployUrl',
+            'transactionType',
+            'projectName',
+            'projectSecretKey',
+            'flowName',
+            'formName',
+            'flowDocumentName',
+            'startingEventCode'
+        ].forEach(key => globalStore.delete(key));
+
+        // Force a clean Setup screen for every successful login. Its mount
+        // fetches the projects for the currently authenticated environment.
+        setProjectScreenSession(previous => previous + 1);
         // data usually contains { username, token, etc. }
         // We only want to store non-sensitive info for tooltips
-        setStepData(prev => ({ ...prev, user: { username: data.username || 'User' } }));
+        setStepData(prev => ({
+            ...prev,
+            user: { username: data.username || 'User' },
+            project: null,
+            definition: null
+        }));
         setCurrent(2);
     };
 
@@ -145,6 +169,17 @@ function App() {
         setStepData(prev => ({ ...prev, project: data }));
         setCurrent(3); // Move to Transfer
     };
+
+    const handleDefinitionDraftChange = useCallback((draft) => {
+        if (!draft?.mainSheet && !draft?.objects?.length && !draft?.flowParams?.length && !draft?.formParams?.length) {
+            return;
+        }
+
+        setStepData(previous => {
+            if (JSON.stringify(previous.definition) === JSON.stringify(draft)) return previous;
+            return { ...previous, definition: draft };
+        });
+    }, []);
 
     const handleTransferComplete = (data) => {
         console.log('Transfer defined:', data);
@@ -242,6 +277,7 @@ function App() {
                                             className="motion-container-md"
                                         >
                                             <ProjectScreen
+                                                key={projectScreenSession}
                                                 onFinish={handleProjectSetup}
                                                 onRestoreSession={handleRestoreSession}
                                                 deployAgents={deployAgents}
@@ -263,6 +299,7 @@ function App() {
                                         >
                                             <TransferScreen
                                                 onFinish={handleTransferComplete}
+                                                onDraftChange={handleDefinitionDraftChange}
                                                 initialData={stepData.definition}
                                             />
                                         </motion.div>

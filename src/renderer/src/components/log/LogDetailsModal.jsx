@@ -148,7 +148,7 @@ export const LogDetailsModal = ({ visible, onCancel, selectedLog, onExportSingle
                 onCancel={onCancel}
                 footer={null}
                 width="min(1280px, calc(100vw - 96px))"
-                style={{ top: 40 }}
+                centered
                 styles={{
                     content: {
                         maxHeight: 'calc(100vh - 80px)',

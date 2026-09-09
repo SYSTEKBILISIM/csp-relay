@@ -44,6 +44,7 @@ const api = {
         deleteRecoverySession: (sessionId) => ipcRenderer.invoke('transfer-log:delete-recovery-session', sessionId),
         recover: (sessionId = 'latest') => ipcRenderer.invoke('transfer-log:recover', sessionId),
         exportJson: (metadata, suggestedName) => ipcRenderer.invoke('transfer-log:export-json', { metadata, suggestedName }),
+        exportRecovery: (metadata, suggestedName) => ipcRenderer.invoke('transfer-log:export-recovery', { metadata, suggestedName }),
         exportDataJson: (data, suggestedName) => ipcRenderer.invoke('transfer-log:export-data-json', { data, suggestedName })
     }
 }

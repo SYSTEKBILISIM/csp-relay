@@ -1,5 +1,5 @@
 export const MIN_PARALLEL_WORKER_COUNT = 1;
-export const MAX_PARALLEL_WORKER_COUNT = 10;
+export const MAX_PARALLEL_WORKER_COUNT = 6;
 export const DEFAULT_PARALLEL_WORKER_COUNT = 3;
 
 export const normalizeParallelWorkerCount = value => {

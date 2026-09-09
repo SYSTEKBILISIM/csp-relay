@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Card, Typography, Button, Table, Progress, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Popover, Checkbox, Select, App, Form } from 'antd';
-import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, ExportOutlined, OrderedListOutlined, ThunderboltOutlined, WarningOutlined } from '@ant-design/icons';
+import { Card, Typography, Button, Table, Progress, Tooltip, Modal, Input, Space, Tabs, Tag, Alert, Segmented, Popover, Checkbox, Select, App, Form, Dropdown } from 'antd';
+import { PlayCircleOutlined, DownloadOutlined, CheckCircleOutlined, SyncOutlined, CloseCircleOutlined, InfoCircleOutlined, StopOutlined, SearchOutlined, CopyOutlined, FileTextOutlined, PauseCircleOutlined, UnorderedListOutlined, CodeOutlined, CaretUpOutlined, CaretDownOutlined, HolderOutlined, UndoOutlined, ReloadOutlined, RightOutlined, EyeOutlined, FileExcelOutlined, DatabaseOutlined, HistoryOutlined, OrderedListOutlined, ThunderboltOutlined, WarningOutlined, EllipsisOutlined } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import Editor from '@monaco-editor/react';
 import { useTransferExecution } from '../hooks/useTransferExecution';
@@ -15,6 +15,7 @@ import {
     parsePrimarySelectionValues,
     parseRowSelectionExpression
 } from '../utils/rowSelectionExpression';
+import { MAX_PARALLEL_WORKER_COUNT } from '../utils/executionConcurrency';
 import '../assets/css/TransferExecutionScreen.css';
 
 // Robust Turkish-aware lowercasing with normalization
@@ -167,6 +168,9 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const [selectedLog, setSelectedLog] = useState(null);
     const [previewModalVisible, setPreviewModalVisible] = useState(false);
     const [previewData, setPreviewData] = useState(null);
+    const [exportMenuOpen, setExportMenuOpen] = useState(false);
+    const [transferActionPending, setTransferActionPending] = useState(null);
+    const queueEditingLocked = loading || isPaused || isComplete || isStopped || Boolean(transferActionPending);
     const [sessionForm] = Form.useForm();
     const [renewingSession, setRenewingSession] = useState(false);
     const tableContainerRef = useRef(null);
@@ -228,6 +232,10 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const countSysErrs = logs.filter(l => l.status === 'Error').length;
     const countValErrs = logs.filter(l => l.status === 'ValidationError').length;
     const totalErrs = countSysErrs + countValErrs;
+    const selectedPendingCount = React.useMemo(() => {
+        const selectedKeys = new Set(selectedRowKeys);
+        return logs.filter(log => selectedKeys.has(log.key) && log.status === 'Pending').length;
+    }, [logs, selectedRowKeys]);
     const averageRowDurationMs = React.useMemo(() => {
         let totalDuration = 0;
         let completedRows = 0;
@@ -245,16 +253,25 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         return completedRows > 0 ? totalDuration / completedRows : null;
     }, [logs]);
 
-    const handleRetry = () => {
+    const runTransferAction = async (action, callback) => {
         setSearchText('');
         setCurrentMatchIndex(-1);
-        retryFailed(retryOptions.system, retryOptions.validation);
+        setActiveTab('results');
+        setTransferActionPending(action);
+        try {
+            await callback();
+        } finally {
+            setTransferActionPending(null);
+        }
+    };
+
+    const handleRetry = () => {
+        void runTransferAction('retry', () => retryFailed(retryOptions.system, retryOptions.validation));
     };
 
     const handleResumeWithFailures = () => {
-        setSearchText('');
-        setCurrentMatchIndex(-1);
-        resumeTransferWithFailures(resumeFailedOptions.system, resumeFailedOptions.validation);
+        void runTransferAction('resume-with-failures', () =>
+            resumeTransferWithFailures(resumeFailedOptions.system, resumeFailedOptions.validation));
     };
 
     const renderErrorTypeOptions = ({ options, setOptions, actionLabel, onAction, danger = false }) => (
@@ -352,10 +369,11 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     }, []);
 
     const handleStartTransfer = () => {
-        setSearchText('');
-        setCurrentMatchIndex(-1);
-        setActiveTab('results');
-        startTransfer();
+        void runTransferAction('start', () => startTransfer());
+    };
+
+    const handleResumeTransfer = () => {
+        void runTransferAction('resume', () => resumeTransfer());
     };
 
     // Prevent closing window during transfer
@@ -711,7 +729,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             align: 'center',
             onHeaderCell: () => ({ className: 'queue-drag-column' }),
             render: (_, record) => {
-                const isLocked = loading || record.status !== 'Pending';
+                const isLocked = queueEditingLocked || record.status !== 'Pending';
                 return (
                     <StableCell style={{ justifyContent: 'center', padding: 0 }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: isLocked ? 0.4 : 1 }}>
@@ -861,8 +879,8 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     };
 
     const openQuickSelection = React.useCallback(() => {
-        if (loading || isPaused) {
-            message.warning('Row selection is locked while transfer is active/paused.');
+        if (queueEditingLocked) {
+            message.warning('Row selection is locked until Restart from Scratch.');
             return;
         }
         if (logs.length === 0) {
@@ -873,7 +891,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         setActiveTab('queue');
         setQuickSelectionError('');
         setQuickSelectionOpen(true);
-    }, [isPaused, loading, logs.length, message]);
+    }, [logs.length, message, queueEditingLocked]);
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -903,6 +921,12 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     }, [openQuickSelection]);
 
     const applyQuickSelection = () => {
+        if (queueEditingLocked) {
+            setQuickSelectionOpen(false);
+            message.warning('Row selection is locked until Restart from Scratch.');
+            return;
+        }
+
         let requestedLogs = [];
         let firstRequestedKey = null;
         let unmatchedValueCount = 0;
@@ -972,6 +996,104 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         }
     };
 
+    const handleExportRecovery = async () => {
+        if (!definitionData) {
+            message.error('Definition data is missing. Please restart the process.');
+            return;
+        }
+
+        message.loading({ content: 'Preparing the recovery checkpoint...', key: 'exportRecovery', duration: 0 });
+
+        try {
+            const metadata = {
+                projectName: definitionData.projectName || 'Unnamed Project',
+                transactionType: definitionData.transactionType || 'N/A',
+                deployAgent: definitionData.deployAgent || 'N/A',
+                flowName: definitionData.flowName,
+                formName: definitionData.formName,
+                flowDocumentName: definitionData.flowDocumentName,
+                startingEventCode: definitionData.startingEventCode,
+                mainSheet: definitionData.mainSheet,
+                mainIdColumn: definitionData.mainIdColumn,
+                fileName: definitionData.fileName,
+                stats
+            };
+            const safeProjectName = String(definitionData.projectName || 'transfer')
+                .replace(/[<>:"/\\|?*]/g, '_');
+            const excludedRecoveryDefinitionKeys = new Set([
+                'recoveredSession',
+                'excelContent',
+                'fileContent',
+                'allSheetsData',
+                'sheetColumns',
+                'excelColumns',
+                'sheets',
+                'password',
+                'token',
+                'encryptedData',
+                'authorization'
+            ]);
+            const checkpointDefinition = Object.fromEntries(
+                Object.entries(definitionData)
+                    .filter(([key]) => !excludedRecoveryDefinitionKeys.has(key))
+            );
+            const checkpointResults = logs
+                .filter(log => log.status !== 'Pending')
+                .map(log => {
+                    const { details: _details, ...summary } = log;
+                    return { ...summary, hasDetails: false };
+                });
+            const fallbackRecoveryData = {
+                fileType: 'csp-relay-transfer-recovery',
+                formatVersion: 1,
+                ...metadata,
+                recoveryContext: {
+                    version: 1,
+                    savedAt: new Date().toISOString(),
+                    mainUrl: globalStore.get('mainUrl'),
+                    definitionData: checkpointDefinition,
+                    excelSourcePath: definitionData.excelSourcePath
+                        || globalStore.get('excelSourcePath')
+                        || globalStore.get('transferFile'),
+                    selectedRowKeys
+                },
+                recoverySummary: {
+                    version: 1,
+                    selectedRowCount: selectedRowKeys.length,
+                    successCount: stats.success,
+                    failedCount: stats.error,
+                    updatedAt: new Date().toISOString()
+                },
+                results: checkpointResults
+            };
+            const result = await logDB.exportRecovery(
+                metadata,
+                `CSP_Relay_Recovery_${safeProjectName}_${Date.now()}.json`,
+                fallbackRecoveryData
+            );
+
+            if (result?.canceled) {
+                message.info({ content: 'Recovery export canceled.', key: 'exportRecovery' });
+                return;
+            }
+            if (!result?.success) {
+                throw new Error(result?.error || 'The recovery checkpoint could not be exported.');
+            }
+
+            message.success({
+                content: `Recovery checkpoint exported to ${result.filePath}`,
+                key: 'exportRecovery',
+                duration: 6
+            });
+        } catch (error) {
+            console.error('Recovery Export Error:', error);
+            message.error({
+                content: `Failed to export recovery checkpoint: ${error.message}`,
+                key: 'exportRecovery',
+                duration: 5
+            });
+        }
+    };
 
     const isLiveModeRef = useRef(true);
     const lastScrollHeightRef = useRef(0);
@@ -1018,8 +1140,8 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
         columnWidth: QUEUE_SELECTION_COLUMN_WIDTH,
         selectedRowKeys,
         onChange: (newSelectedRowKeys) => {
-            if (loading || isPaused) {
-                message.warning("Row selection is locked while transfer is active/paused.");
+            if (queueEditingLocked) {
+                message.warning('Row selection is locked until Restart from Scratch.');
                 return;
             }
             setSelectedRowKeys(newSelectedRowKeys);
@@ -1028,7 +1150,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             <span
                 style={{ display: 'inline-flex' }}
                 onClickCapture={(event) => {
-                    if (loading || isPaused || record.status !== 'Pending') return;
+                    if (queueEditingLocked || record.status !== 'Pending') return;
 
                     const anchorKey = selectionAnchorKeyRef.current;
                     if (!event.shiftKey || anchorKey === null) {
@@ -1071,16 +1193,16 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
             </span>
         ),
         getCheckboxProps: (record) => ({
-            disabled: loading || isPaused || record.status !== 'Pending',
+            disabled: queueEditingLocked || record.status !== 'Pending',
         }),
     };
 
     const handleStopTransfer = () => {
         const stopDescription = !loading
-            ? 'The paused transfer will be closed and cannot be resumed from its current queue position.'
+            ? 'The paused transfer will be stopped.'
             : executionMode === 'parallel'
-                ? 'Rows currently being processed will finish safely, then the remaining queue will be stopped.'
-                : 'The row currently being processed will finish safely, then the remaining queue will be stopped.';
+                ? 'Rows currently being processed will finish safely, then the remaining queue will stop.'
+                : 'The row currently being processed will finish safely, then the remaining queue will stop.';
 
         modal.confirm({
             centered: true,
@@ -1099,12 +1221,9 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                         </div>
                     </div>
                     <p className="stop-transfer-dialog-description">{stopDescription}</p>
-                    <div className="stop-transfer-dialog-note">
-                        Run again with <strong>Restart from Scratch</strong>.
-                    </div>
                 </div>
             ),
-            okText: 'Stop Transfer',
+            okText: isRetryMode ? 'Stop Retry' : 'Stop Transfer',
             okType: 'danger',
             cancelText: 'Continue Transfer',
             onOk: stopTransfer
@@ -1114,7 +1233,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     const onQueueRow = (record, index) => {
         const isLocked = record.status !== 'Pending';
 
-        if (loading || isLocked) {
+        if (queueEditingLocked || isLocked) {
             return {
                 style: { cursor: 'not-allowed' }
             };
@@ -1146,6 +1265,41 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
     };
 
     const showTransferIndicator = loading;
+    const pendingActionLabel = transferActionPending === 'start'
+        ? 'Starting transfer...'
+        : transferActionPending === 'retry'
+            ? 'Starting retry...'
+            : transferActionPending === 'resume-with-failures'
+                ? 'Resuming pending + failed...'
+                : 'Resuming transfer...';
+    const canExportRecovery = !loading && (isPaused || isStopped || isComplete);
+    const hasProcessedRows = stats.processed > 0;
+    const exportMenuItems = [
+        {
+            key: 'recovery',
+            label: 'Export Recovery',
+            icon: <HistoryOutlined style={{ color: '#8b5cf6' }} />,
+            disabled: !canExportRecovery
+        },
+        {
+            key: 'excel',
+            label: 'Export Excel',
+            icon: <FileExcelOutlined style={{ color: '#16a34a' }} />,
+            disabled: !hasProcessedRows
+        },
+        {
+            key: 'json',
+            label: 'Export JSON Logs',
+            icon: <DownloadOutlined style={{ color: '#3b82f6' }} />,
+            disabled: !hasProcessedRows
+        }
+    ];
+    const handleExportMenuClick = ({ key }) => {
+        setExportMenuOpen(false);
+        if (key === 'recovery') void handleExportRecovery();
+        if (key === 'excel') void handleExportLogs();
+        if (key === 'json') void handleExportFullJSON();
+    };
 
     return (
         <Card variant="borderless" className="exec-container" styles={{ body: { padding: '16px', display: 'flex', flexDirection: 'column', height: 'calc(100vh - 92px)' } }}>
@@ -1153,7 +1307,19 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                 <div className="exec-header-copy">
                     <div className="exec-title-row">
                         <Title level={3}>
-                            {isStopped ? 'Transfer Stopped' : isComplete ? 'Transfer Completed' : 'Queue Details & Transfer'}
+                            {isStopped
+                                ? 'Transfer Stopped'
+                                : transferActionPending === 'start'
+                                    ? 'Starting Transfer'
+                                    : transferActionPending === 'retry'
+                                        ? 'Starting Retry'
+                                        : transferActionPending
+                                            ? 'Resuming Transfer'
+                                : (isPaused || (isComplete && selectedPendingCount > 0))
+                                    ? 'Transfer Paused'
+                                    : isComplete
+                                        ? 'Transfer Completed'
+                                        : 'Queue Details & Transfer'}
                         </Title>
                     </div>
                     <Text type="secondary" className="exec-header-subtitle">
@@ -1232,7 +1398,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                                 value={parallelWorkerCount}
                                 onChange={setParallelWorkerCount}
                                 disabled={isPausing || isStopping}
-                                options={Array.from({ length: 10 }, (_, index) => ({
+                                options={Array.from({ length: MAX_PARALLEL_WORKER_COUNT }, (_, index) => ({
                                     value: index + 1,
                                     label: String(index + 1)
                                 }))}
@@ -1367,16 +1533,25 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
 
             <div className="action-buttons-row">
                 <div className="transfer-action-buttons">
-                {!loading && !isPaused && !isComplete && !retryState.isRetrying && (
+                {!isStopped && !loading && transferActionPending && (
+                    <Button type="primary" icon={<PlayCircleOutlined />} loading disabled size="large" className="resume-btn">
+                        {pendingActionLabel}
+                    </Button>
+                )}
+                {!isStopped && !loading && !transferActionPending && !isPaused && !isComplete && !retryState.isRetrying && (
                     <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleStartTransfer} size="large">Start Transfer</Button>
                 )}
-                {isPaused && !loading && (
-                    <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => { setSearchText(''); setCurrentMatchIndex(-1); resumeTransfer(); }} size="large"
+                {!isStopped && !loading && !transferActionPending && (isPaused || (isComplete && selectedPendingCount > 0)) && (
+                    <Button
+                        type="primary"
+                        icon={<PlayCircleOutlined />}
+                        onClick={handleResumeTransfer}
+                        size="large"
                         className="resume-btn">
                         {isRetryMode ? 'Resume Retry' : 'Resume Transfer'}
                     </Button>
                 )}
-                {isPaused && !loading && !isRetryMode && totalErrs > 0 && (
+                {!isStopped && isPaused && !loading && !transferActionPending && !isRetryMode && totalErrs > 0 && (
                     <Popover content={resumeFailedPopoverContent} title="Resume Configuration" trigger="click" placement="bottomLeft">
                         <Button
                             type="default"
@@ -1387,48 +1562,47 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                         </Button>
                     </Popover>
                 )}
-                {loading && (
+                {!isStopped && loading && (
                     <Button type="default" icon={<PauseCircleOutlined />} onClick={pauseTransfer} disabled={isPaused || isStopping || isPausing} size="large"
                         className="pause-btn">
                         {isPausing ? (isRetryMode ? 'Pausing Retry...' : 'Pausing...') : (isRetryMode ? 'Pause Retry' : 'Pause')}
                     </Button>
                 )}
-                {(loading || isPaused) && (
+                {!isStopped && (loading || isPaused) && (
                     <Button danger icon={<StopOutlined />} onClick={handleStopTransfer} size="large" disabled={isStopping || isPausing}>
                         {isStopping ? (isRetryMode ? 'Stopping Retry...' : 'Stopping...') : (isRetryMode ? 'Stop Retry' : 'Stop Transfer')}
                     </Button>
                 )}
 
-                {isComplete && !isStopped && totalErrs > 0 && (
+                {isComplete && !isStopped && !transferActionPending && totalErrs > 0 && (
                     <Popover content={retryPopoverContent} title="Retry Configuration" trigger="click" placement="bottomLeft">
                         <Button type="primary" danger icon={<UndoOutlined />} size="large">Retry {totalErrs} Failed Rows</Button>
                     </Popover>
                 )}
-                {isComplete && (
+                {(isStopped || isComplete) && (
                     <Button type="dashed" icon={<ReloadOutlined />} onClick={resetTransfer} size="large">Restart from Scratch</Button>
                 )}
-
-                {(!loading && stats.processed > 0) && (
-                    <Space size={12} style={{ marginLeft: 'auto' }}>
-                        <Tooltip title="Export to Excel">
-                            <Button
-                                type="default"
-                                icon={<FileExcelOutlined style={{ color: '#16a34a' }} />}
-                                onClick={handleExportLogs}
-                                size="large"
-                                className="hover-btn-soft"
-                            />
-                        </Tooltip>
-                        <Tooltip title="Export Transfer Logs">
-                            <Button
-                                type="default"
-                                icon={<DownloadOutlined style={{ color: '#3b82f6' }} />}
-                                onClick={handleExportFullJSON}
-                                size="large"
-                                className="hover-btn-soft"
-                            />
-                        </Tooltip>
-                    </Space>
+                {!loading && (canExportRecovery || hasProcessedRows) && (
+                    <Dropdown
+                        menu={{ items: exportMenuItems, onClick: handleExportMenuClick }}
+                        open={exportMenuOpen}
+                        onOpenChange={setExportMenuOpen}
+                        trigger={['hover', 'click']}
+                        placement="bottomRight"
+                        mouseEnterDelay={0}
+                        mouseLeaveDelay={0.35}
+                        autoAdjustOverflow
+                        getPopupContainer={() => document.body}
+                        overlayStyle={{ zIndex: 1600 }}
+                    >
+                        <Button
+                            type="default"
+                            icon={<EllipsisOutlined />}
+                            size="large"
+                            className="transfer-export-trigger"
+                            aria-label="Export options"
+                        />
+                    </Dropdown>
                 )}
                 </div>
             </div>
@@ -1450,7 +1624,7 @@ export const TransferExecutionScreen = ({ definitionData, onFinish, onStatusChan
                             <Button
                                 className="quick-selection-trigger"
                                 icon={<OrderedListOutlined />}
-                                disabled={loading || isPaused || logs.length === 0}
+                                disabled={queueEditingLocked || logs.length === 0}
                                 onClick={openQuickSelection}
                             >
                                 Quick Select

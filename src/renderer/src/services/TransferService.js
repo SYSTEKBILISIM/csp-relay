@@ -1,6 +1,9 @@
 import _ from 'lodash';
 import { resolveTokens, normalizeString, resolvePrimitiveValue, calculateSimilarity, getRowValue } from '../utils/transferUtils';
 import { constructPayload } from './PayloadFactory';
+import { getRelatedDocumentSourceRows, parseRelatedDocumentPaths } from '../utils/relatedDocumentUtils';
+import { getRequiredMappingError } from '../utils/mappingValidation';
+import { optimizeLogValue } from '../../../shared/logValueOptimizer';
 import {
     getErrorHttpStatus,
     getHttpStatusMessage,
@@ -19,6 +22,125 @@ const RECOVERY_BINARY_CHUNK_BYTES = 1.5 * 1024 * 1024;
 const RECOVERY_BINARY_TYPE = 'recovery-binary';
 const LOCAL_FILE_REFERENCE_TYPE = 'local-file';
 
+const summarizeValidationErrors = errors => Array.isArray(errors)
+    ? errors.map(error => ({
+        message: error?.message ?? error?.Message ?? String(error),
+        field: error?.field ?? error?.Field ?? error?.propertyName ?? error?.PropertyName
+    }))
+    : [];
+
+const summarizeFormSaveResponse = form => {
+    const result = form?.formSaveResponse?.result || form?.FormSaveResponse?.Result || {};
+    const formSaveResponse = form?.formSaveResponse || form?.FormSaveResponse || {};
+
+    return {
+        documentKey: form?.documentKey ?? form?.DocumentKey,
+        documentName: form?.documentName ?? form?.DocumentName,
+        formName: form?.formName ?? form?.FormName,
+        viewName: form?.viewName ?? form?.ViewName,
+        success: formSaveResponse?.success ?? formSaveResponse?.Success,
+        result: {
+            status: result?.status ?? result?.Status,
+            documentId: result?.documentId ?? result?.DocumentId,
+            validationErrors: summarizeValidationErrors(result?.validationErrors ?? result?.ValidationErrors)
+        }
+    };
+};
+
+const compactExceptionMessage = value => {
+    if (!value) return null;
+    const firstLine = String(value).split(/\r?\n/, 1)[0].trim();
+    return firstLine.length > 1800
+        ? `${firstLine.slice(0, 1800)}...[TRUNCATED]`
+        : firstLine;
+};
+
+const parseResponseJson = value => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return value;
+    try {
+        return JSON.parse(trimmed);
+    } catch {
+        return value;
+    }
+};
+
+const summarizeServerException = response => {
+    if (!response || typeof response !== 'object' || Array.isArray(response)) return null;
+    if (!response.ClassName && !response.className && !response.InnerException && !response.innerException) return null;
+
+    const chain = [];
+    const visited = new Set();
+    let current = response;
+    while (current && typeof current === 'object' && chain.length < 10 && !visited.has(current)) {
+        visited.add(current);
+        chain.push({
+            className: current.ClassName ?? current.className,
+            message: compactExceptionMessage(current.Message ?? current.message),
+            code: current.Code ?? current.code,
+            footprint: current.FootPrint ?? current.footPrint ?? current.footprint
+        });
+        current = current.InnerException ?? current.innerException;
+    }
+
+    const rootCause = [...chain].reverse().find(item => item.message) || chain[0] || {};
+    let serialized = '';
+    try {
+        serialized = JSON.stringify(response);
+    } catch {
+        serialized = rootCause.message || '';
+    }
+    const isDatabaseTimeout = /Execution Timeout Expired|timeout period elapsed prior to completion of the operation/i.test(serialized);
+    const connectionId = /ClientConnectionId:\s*([a-f0-9-]+)/i.exec(serialized)?.[1];
+    const errorNumber = /Error Number:\s*(-?\d+)/i.exec(serialized)?.[1];
+
+    return {
+        type: 'server-exception',
+        message: compactExceptionMessage(response.Message ?? response.message),
+        rootCause,
+        exceptionChain: chain,
+        ...(isDatabaseTimeout ? {
+            databaseError: {
+                type: 'execution-timeout',
+                message: 'Execution Timeout Expired. The workflow could not be saved before the database timeout elapsed.',
+                errorNumber: errorNumber ? Number(errorNumber) : -2,
+                clientConnectionId: connectionId || null
+            }
+        } : {})
+    };
+};
+
+const summarizeTransferResponse = response => {
+    const normalizedResponse = parseResponseJson(response);
+    const exceptionSummary = summarizeServerException(normalizedResponse);
+    if (exceptionSummary) return exceptionSummary;
+    if (!normalizedResponse || typeof normalizedResponse !== 'object') {
+        return optimizeLogValue(normalizedResponse, 'response');
+    }
+
+    const saveResponse = normalizedResponse.saveResponse || normalizedResponse.SaveResponse;
+    if (!saveResponse || typeof saveResponse !== 'object') {
+        return optimizeLogValue(normalizedResponse, 'response');
+    }
+
+    const forms = saveResponse.forms || saveResponse.Forms || [];
+    return {
+        status: normalizedResponse.status ?? normalizedResponse.Status,
+        saveResponse: {
+            actionType: saveResponse.actionType ?? saveResponse.ActionType,
+            actionResult: saveResponse.actionResult ?? saveResponse.ActionResult,
+            status: saveResponse.status ?? saveResponse.Status,
+            instanceId: saveResponse.instanceId ?? saveResponse.InstanceId,
+            processId: saveResponse.processId ?? saveResponse.ProcessId,
+            finishDate: saveResponse.finishDate ?? saveResponse.FinishDate,
+            currentRequestForUser: saveResponse.currentRequestForUser ?? saveResponse.CurrentRequestForUser,
+            validationErrors: summarizeValidationErrors(saveResponse.validationErrors ?? saveResponse.ValidationErrors),
+            forms: Array.isArray(forms) ? forms.map(summarizeFormSaveResponse) : []
+        }
+    };
+};
+
 const normalizeControlText = value => value === null || value === undefined
     ? null
     : String(value);
@@ -34,20 +156,55 @@ const getRelayCapabilityFailureMessage = error => {
     return 'The relay capability check could not be completed. Check the environment connection, session, and deployed Systek_SynergyCSPRelay application.';
 };
 
+const isWorkflowContextRaceFailure = value => {
+    const text = typeof value === 'string'
+        ? value
+        : (() => {
+            try {
+                return JSON.stringify(value);
+            } catch {
+                return '';
+            }
+        })();
+
+    return /(?:System\.)?IndexOutOfRangeException|Index was outside the bounds of the array/i.test(text) &&
+        /Dictionary(?:`2)?\.TryInsert|AddOrUpdateContext/i.test(text);
+};
+
+const getRetryDelay = (attempt, workflowContextRace = false) => {
+    const exponentialDelay = 1000 * Math.pow(2, attempt);
+    if (!workflowContextRace) return exponentialDelay;
+    return Math.round((exponentialDelay * 1.5) + 250 + (Math.random() * 1000));
+};
+
 async function fetchWithRetry(url, options, maxRetries = 3) {
     for (let i = 0; i <= maxRetries; i++) {
         try {
             const res = await fetch(url, options);
-            if ((res.status === 502 || res.status === 503 || res.status === 504) && i < maxRetries) {
-                console.warn(`[API] ${res.status} Error on ${url}. Retrying ${i + 1}/${maxRetries}...`);
-                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i))); // 1s, 2s, 4s
+            const gatewayFailure = res.status === 502 || res.status === 503 || res.status === 504;
+            let workflowContextRace = false;
+            if (res.status === 400) {
+                try {
+                    workflowContextRace = isWorkflowContextRaceFailure(await res.clone().text());
+                } catch {
+                    workflowContextRace = false;
+                }
+            }
+
+            if ((gatewayFailure || workflowContextRace) && i < maxRetries) {
+                const retryDelay = getRetryDelay(i, workflowContextRace);
+                const retryReason = workflowContextRace
+                    ? 'temporary CSP workflow context conflict'
+                    : `${res.status} gateway error`;
+                console.warn(`[API] ${retryReason} on ${url}. Retrying ${i + 1}/${maxRetries} in ${retryDelay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, retryDelay));
                 continue;
             }
             return res;
         } catch (err) {
             if (i < maxRetries) {
                 console.warn(`[API] Network error on ${url}. Retrying ${i + 1}/${maxRetries}...`, err);
-                await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, i)));
+                await new Promise(resolve => setTimeout(resolve, getRetryDelay(i)));
                 continue;
             }
             throw err;
@@ -1571,6 +1728,21 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             Scope: mapping.controlScope || defaultScope
         });
 
+        const validateRequiredMapping = (mapping, result, fieldName) => {
+            const validationMessage = getRequiredMappingError(mapping, result, fieldName);
+            if (!validationMessage) return;
+
+            executionLog.push({
+                key: `required_${Date.now()}_${Math.random()}`,
+                step: 'Required Field Validation',
+                details: validationMessage,
+                status: 'Error'
+            });
+            const validationError = new Error(validationMessage);
+            validationError.isValidationError = true;
+            throw validationError;
+        };
+
         const resolveParameterDefinitions = async (paramsDef, sourceRow, context, defaultControlScope = 'Current') => {
             if (!paramsDef || !Array.isArray(paramsDef)) return {};
 
@@ -1657,22 +1829,21 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     }
 
                     if (colType === 'RelatedDocument') {
-                        const pathCol = colDef.mapping?.pathCol;
+                        const relatedDocumentMapping = colDef.mapping || {};
+                        const pathCol = relatedDocumentMapping.pathCol;
                         if (pathCol) {
-                            const filePathRaw = String(gridRow[pathCol] || '').trim();
-                            if (filePathRaw && window.api?.readFileInfo) {
-                                let filePaths = [];
-                                try {
-                                    const parsed = JSON.parse(filePathRaw);
-                                    if (Array.isArray(parsed)) {
-                                        filePaths = parsed.map(p => String(p || '').trim()).filter(Boolean);
-                                    } else {
-                                        filePaths = [filePathRaw];
-                                    }
-                                } catch (e) {
-                                    filePaths = [filePathRaw];
-                                }
+                            const sourceRows = getRelatedDocumentSourceRows(
+                                relatedDocumentMapping,
+                                gridRow,
+                                definitionData,
+                                allSheetsData
+                            );
+                            const fileEntries = sourceRows.flatMap(sourceRow => (
+                                parseRelatedDocumentPaths(getRowValue(sourceRow, pathCol))
+                                    .map(filePath => ({ filePath, sourceRow }))
+                            ));
 
+                            if (fileEntries.length > 0 && window.api?.readFileInfo) {
                                 const deployUrl = globalStore.get('deployUrl');
                                 const fileBaseUrl = `${deployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer`;
                                 const fileHeaders = { 'Content-Type': 'application/json' };
@@ -1684,11 +1855,15 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                 fileHeaders['bimser-language'] = userLang;
 
                                 const resolvedItems = [];
-                                for (const filePath of filePaths) {
+                                for (const { filePath, sourceRow } of fileEntries) {
                                     const fileResult = await window.api.readFileInfo(filePath);
                                     if (fileResult.success) {
                                         try {
-                                            const { targetPath, category } = resolveRelatedDocumentTarget(colDef.mapping, gridRow, rowContext);
+                                            const { targetPath, category } = resolveRelatedDocumentTarget(
+                                                relatedDocumentMapping,
+                                                sourceRow,
+                                                rowContext
+                                            );
                                             const descriptor = targetPath
                                                 ? await uploadFileInParts(
                                                     fileBaseUrl,
@@ -1734,7 +1909,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                         Items: resolvedItems
                                     });
                                 }
-                            } else if (filePathRaw && !window.api?.readFileInfo) {
+                            } else if (fileEntries.length > 0 && !window.api?.readFileInfo) {
                                 const errMsg = `RelatedDocument '${colDef.name}': file reader API not available`;
                                 executionLog.push({
                                     key: `reldoc_api_err_${Date.now()}_${Math.random()}`,
@@ -1743,6 +1918,10 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                     status: 'Error'
                                 });
                                 throw new Error(errMsg);
+                            } else if (relatedDocumentMapping.relatedDocumentSource === 'RelatedSheet' && sourceRows.length === 0) {
+                                console.warn(`[RelatedDocument] No rows in sheet "${relatedDocumentMapping.relatedSheet}" matched ${relatedDocumentMapping.detailKey} for the current ${relatedDocumentMapping.masterKey} value.`);
+                            } else {
+                                console.warn(`[RelatedDocument] No file path in column "${pathCol}" for the matched grid row(s).`);
                             }
                         }
                         continue; // Skip to next column
@@ -1750,6 +1929,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
 
                     // Standard value resolution
                     const result = await resolveMappedValue(colDef.mapping, gridRow, globalStore, apiCache, rowContext, executionLog, warnings, colDef.name, systemSettings);
+                    validateRequiredMapping(colDef.mapping, result, colDef.name);
 
                     // Add to rowContext so subsequent columns in the grid row can use it
                     rowContext[colDef.name] = result;
@@ -1918,20 +2098,13 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                 } else if (type === 'RelatedDocument') {
                     const pathCol = mapping.pathCol;
                     if (pathCol) {
-                        const filePathRaw = String(getRowValue(rowData, pathCol) || '').trim();
-                        if (filePathRaw && window.api?.readFileInfo) {
-                            let filePaths = [];
-                            try {
-                                const parsed = JSON.parse(filePathRaw);
-                                if (Array.isArray(parsed)) {
-                                    filePaths = parsed.map(p => String(p || '').trim()).filter(Boolean);
-                                } else {
-                                    filePaths = [filePathRaw];
-                                }
-                            } catch (e) {
-                                filePaths = [filePathRaw];
-                            }
+                        const sourceRows = getRelatedDocumentSourceRows(mapping, rowData, definitionData, allSheetsData);
+                        const fileEntries = sourceRows.flatMap(sourceRow => (
+                            parseRelatedDocumentPaths(getRowValue(sourceRow, pathCol))
+                                .map(filePath => ({ filePath, sourceRow }))
+                        ));
 
+                        if (fileEntries.length > 0 && window.api?.readFileInfo) {
                             const fileDeployUrl = globalStore.get('deployUrl');
                             if (!fileDeployUrl) throw new Error('Deploy URL not found');
                             const fileBaseUrl = `${fileDeployUrl.replace(/\/$/, '')}/apps/${RELAY_CSP_APP_NAME}/latest/api/Transfer`;
@@ -1944,11 +2117,11 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                             fileHeaders['bimser-language'] = userLang;
 
                             const resolvedItems = [];
-                            for (const filePath of filePaths) {
+                            for (const { filePath, sourceRow } of fileEntries) {
                                 const fileResult = await window.api.readFileInfo(filePath);
                                 if (fileResult.success) {
                                     try {
-                                        const { targetPath, category } = resolveRelatedDocumentTarget(mapping, rowData, objectContext);
+                                        const { targetPath, category } = resolveRelatedDocumentTarget(mapping, sourceRow, objectContext);
                                         const descriptor = targetPath
                                             ? await uploadFileInParts(
                                                 fileBaseUrl,
@@ -1989,7 +2162,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                     Items: resolvedItems
                                 };
                             }
-                        } else if (filePathRaw && !window.api?.readFileInfo) {
+                        } else if (fileEntries.length > 0 && !window.api?.readFileInfo) {
                             const errMsg = `RelatedDocument '${def.name}': file reader API not available`;
                             executionLog.push({
                                 key: `reldoc_api_err_${Date.now()}_${Math.random()}`,
@@ -1998,12 +2171,15 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                                 status: 'Error'
                             });
                             throw new Error(errMsg);
-                        } else if (!filePathRaw) {
-                            console.warn(`[RelatedDocument] No file path in column "${pathCol}" for this row.`);
+                        } else if (mapping.relatedDocumentSource === 'RelatedSheet' && sourceRows.length === 0) {
+                            console.warn(`[RelatedDocument] No rows in sheet "${mapping.relatedSheet}" matched ${mapping.detailKey} for the current ${mapping.masterKey || definitionData.mainIdColumn} value.`);
+                        } else {
+                            console.warn(`[RelatedDocument] No file path in column "${pathCol}" for the matched row(s).`);
                         }
                     }
                 } else {
                     const result = await resolveMappedValue(mapping, rowData, globalStore, apiCache, objectContext, executionLog, warnings, def.name, systemSettings);
+                    validateRequiredMapping(mapping, result, def.name);
                     objectContext[def.name] = result;
                     rowObj = {
                         FieldName: def.name,
@@ -2087,7 +2263,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             if (logEntry) {
                 logEntry.raw = {
                     request: { url, method: 'POST', headers, body },
-                    response: responseBody
+                    response: summarizeTransferResponse(responseBody)
                 };
             }
 
@@ -2182,7 +2358,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             executionLog.push(beginLog);
             const beginResponse = await postTransferJson('BeginFlowSession', beginPayload, beginLog);
             beginLog.status = 'Success';
-            sessionDiagnostics.push({ step: 'BeginFlowSession', response: beginResponse });
+            sessionDiagnostics.push({ step: 'BeginFlowSession', response: summarizeTransferResponse(beginResponse) });
 
             const sessionId = beginResponse.sessionId || beginResponse.SessionId;
             if (!sessionId) throw new Error('BeginFlowSession response did not include sessionId.');
@@ -2210,7 +2386,12 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
                     executionLog.push(appendLog);
                     const appendResponse = await postTransferJson('AppendRelatedGridRows', appendBody, appendLog);
                     appendLog.status = 'Success';
-                    sessionDiagnostics.push({ step: 'AppendRelatedGridRows', fieldName: job.relatedGrid.FieldName, rowCount: chunkRows.length, response: appendResponse });
+                    sessionDiagnostics.push({
+                        step: 'AppendRelatedGridRows',
+                        fieldName: job.relatedGrid.FieldName,
+                        rowCount: chunkRows.length,
+                        response: summarizeTransferResponse(appendResponse)
+                    });
                 }
             }
 
@@ -2219,7 +2400,7 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             executionLog.push(finalizeLog);
             fullApiResponse = await postTransferJson('FinalizeFlowSession', finalizeBody, finalizeLog);
             finalizeLog.status = 'Success';
-            sessionDiagnostics.push({ step: 'FinalizeFlowSession', response: fullApiResponse });
+            sessionDiagnostics.push({ step: 'FinalizeFlowSession', response: summarizeTransferResponse(fullApiResponse) });
 
             responseOk = true;
             responseStatus = 200;
@@ -2303,21 +2484,40 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
             }
         } else {
             execLog.status = 'Error';
-            execLog.details += ' - HTTP Failed';
-            msg = getHttpStatusMessage(responseStatus) || msg;
+            const workflowContextRaceExhausted = isWorkflowContextRaceFailure(fullApiResponse);
+            const responseFailure = new Error(`HTTP ${responseStatus} ${responseStatusText}`);
+            responseFailure.status = responseStatus;
+            responseFailure.statusText = responseStatusText;
+            responseFailure.rawResponse = fullApiResponse;
+            const responseFailureMessage = getTransferFailureMessage(responseFailure);
+            execLog.details += workflowContextRaceExhausted
+                ? ' - CSP workflow context conflict after automatic retries'
+                : ` - ${responseFailureMessage}`;
+            msg = workflowContextRaceExhausted
+                ? 'CSP workflow context conflict persisted after automatic retries. The affected row remains failed and can be retried.'
+                : responseFailureMessage;
             autoPauseTransfer = isConnectivityFailureStatus(responseStatus);
         }
 
-        // Capture raw diagnostics for the final execution step
+        // Keep only the operationally useful response fields in renderer memory.
+        // Successful CSP responses can include the complete form model and several
+        // large secret values; retaining that model for every row eventually causes
+        // long-running transfers to exhaust the renderer heap.
+        const diagnosticPayload = optimizeLogValue(payload);
+        const diagnosticResponse = summarizeTransferResponse(fullApiResponse);
+
+        // Capture compact diagnostics for the final execution step.
         execLog.raw = {
             request: {
                 url: `${baseUrl}/${endpointStr}`,
                 method: 'POST',
                 headers,
-                body: transactionType === 'CreateFlow' && relatedGridJobs.length > 0 ? beginPayload : payload,
+                body: transactionType === 'CreateFlow' && relatedGridJobs.length > 0
+                    ? optimizeLogValue(beginPayload)
+                    : diagnosticPayload,
                 sessionDiagnostics
             },
-            response: fullApiResponse
+            response: diagnosticResponse
         };
 
         if (status === 'Success' && warnings.length > 0) {
@@ -2327,8 +2527,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         return {
             status,
             message: msg,
-            payload,
-            response: fullApiResponse,
+            payload: diagnosticPayload,
+            response: diagnosticResponse,
             executionLog,
             warnings,
             autoPauseTransfer
@@ -2341,8 +2541,8 @@ export const processRowAndExecute = async (rowData, definitionData, globalStore,
         return {
             status: networkError.isValidationError ? 'ValidationError' : 'Error',
             message: getTransferFailureMessage(networkError),
-            payload,
-            response: networkError.rawResponse || null,
+            payload: optimizeLogValue(payload),
+            response: summarizeTransferResponse(networkError.rawResponse || null),
             executionLog,
             warnings,
             autoPauseTransfer: isConnectivityFailure(networkError),

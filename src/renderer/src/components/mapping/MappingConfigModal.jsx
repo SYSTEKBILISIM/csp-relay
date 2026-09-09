@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Modal, Form, message } from 'antd';
+import { Modal, Form, message, theme } from 'antd';
 import { MappingFields } from './MappingFields';
 import { GridMappingConfig } from './GridMappingConfig';
 import { RelatedDocumentConfig } from './RelatedDocumentConfig';
@@ -14,6 +14,8 @@ export const MappingConfigModal = ({
     type = 'Object', 
     sheetColumns, 
     currentColumns,
+    mainSheet,
+    mainIdColumn,
     mainFormFields = [],
     formScopes = [],
     currentFormName,
@@ -22,6 +24,7 @@ export const MappingConfigModal = ({
     zIndex = 1000
 }) => {
     const [form] = Form.useForm();
+    const { token } = theme.useToken();
     const [apiStep, setApiStep] = React.useState(0);
     const rootFormScopes = React.useMemo(() => ([{
         key: 'main',
@@ -41,7 +44,10 @@ export const MappingConfigModal = ({
             if (initialValues && Object.keys(initialValues).length > 0 && initialValues.source) {
                 form.setFieldsValue({
                     isArray: false,
+                    requiredValue: false,
                     gridWriteMode: 'Append',
+                    relatedDocumentSource: 'MainSheet',
+                    masterKey: mainIdColumn,
                     ...initialValues,
                     cacheApiResponse: initialValues.cacheApiResponse !== false
                 });
@@ -51,17 +57,20 @@ export const MappingConfigModal = ({
                     source: 'Excel', 
                     dataType: 'String',
                     isArray: false,
+                    requiredValue: false,
                     apiMethod: 'POST', 
                     apiType: 'Internal', 
                     responsePath: 'result.result',
                     gridColumns: [],
                     gridWriteMode: 'Append',
+                    relatedDocumentSource: 'MainSheet',
+                    masterKey: mainIdColumn,
                     ...initialValues,
                     cacheApiResponse: initialValues?.cacheApiResponse !== false
                 });
             }
         }
-    }, [visible, initialValues]);
+    }, [visible, initialValues, mainIdColumn]);
 
     const handleOk = () => {
         const formValues = form.getFieldsValue(true);
@@ -133,14 +142,21 @@ export const MappingConfigModal = ({
             open={visible}
             onCancel={onCancel}
             onOk={handleOk}
-            width={width}
+            width={type === 'RelatedDocument' ? 820 : width}
             zIndex={zIndex}
             destroyOnHidden
-            style={{ top: 50 }}
-            styles={{ 
-                header: { borderBottom: '1px solid #f1f5f9', padding: '12px 24px' },
-                body: { maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', padding: '12px 24px 24px 24px' } 
-            }}
+            centered={type === 'RelatedDocument'}
+            style={type === 'RelatedDocument' ? undefined : { top: 50 }}
+            styles={type === 'RelatedDocument'
+                ? {
+                    header: { borderBottom: `1px solid ${token.colorBorderSecondary}`, padding: '0 0 16px' },
+                    body: { maxHeight: 'calc(100vh - 180px)', overflowY: 'auto', padding: '20px 0 0' },
+                    footer: { marginTop: 20 }
+                }
+                : {
+                    header: { borderBottom: '1px solid #f1f5f9', padding: '12px 24px' },
+                    body: { maxHeight: 'calc(100vh - 220px)', overflowY: 'auto', padding: '12px 24px 24px 24px' }
+                }}
         >
             <Form form={form} layout="vertical" preserve={true}>
                 {type === 'InlineGrid' || type === 'RelatedGrid' ? (
@@ -158,6 +174,9 @@ export const MappingConfigModal = ({
                     <RelatedDocumentConfig
                         form={form}
                         excelColumns={excelColumns}
+                        sheetColumns={sheetColumns}
+                        mainSheet={mainSheet}
+                        mainIdColumn={mainIdColumn}
                     />
                 ) : (
                     <div className="fade-in-anim">

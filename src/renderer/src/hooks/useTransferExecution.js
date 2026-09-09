@@ -113,7 +113,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     const [isStopped, setIsStopped] = useState(false);
     const [excelData, setExcelData] = useState([]);
 
-    const [isPaused, setIsPaused] = useState(false);
+    const startsFromRecovery = Boolean(definitionData?.recoveredSession);
+    const [isPaused, setIsPaused] = useState(startsFromRecovery);
     const [sessionRenewalRequired, setSessionRenewalRequired] = useState(false);
     const sessionRenewalRequiredRef = useRef(false);
     const [sessionToken, setSessionToken] = useState(() => globalStore.get('token'));
@@ -130,7 +131,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         
         // Safe sync: Update the total count whenever the user chooses rows, 
         // but only if we haven't started processing yet to prevent jumping numbers.
-        if (!isRunning.current && !loading) {
+        if (!isRunning.current && !loading && !isComplete && !isStopped) {
             setStats(prev => ({ 
                 ...prev, 
                 total: keys.length,
@@ -146,7 +147,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     };
 
     const isRunning = useRef(false);
-    const isPausedRef = useRef(false);
+    const isPausedRef = useRef(startsFromRecovery);
     const apiCache = useRef(apiResponseCache);
     const apiCacheActivationRef = useRef(Promise.resolve());
     const activeApiCacheSessionIdRef = useRef(null);
@@ -395,12 +396,29 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
     };
 
     const resumeTransfer = () => {
+        if (isStopped) return Promise.resolve(false);
+
         if (isPausedRef.current || isPaused) {
-            startTransfer(executionScopeRef.current);
+            return startTransfer(executionScopeRef.current);
         }
+
+        // Defensive recovery for an older/boundary state that was marked
+        // complete even though selected Pending rows still exist.
+        const hasPendingRows = logsStateRef.current.some(log =>
+            selectedRowKeysRef.current.includes(log.key) && log.status === 'Pending'
+        );
+        if (isComplete && hasPendingRows) {
+            setIsComplete(false);
+            setIsStopped(false);
+            return startTransfer(TRANSFER_EXECUTION_SCOPE.PENDING);
+        }
+
+        return Promise.resolve();
     };
 
     const resumeTransferWithFailures = (resumeSystem = true, resumeValidation = true) => {
+        if (isStopped) return Promise.resolve(false);
+
         if (isPausedRef.current || isPaused) {
             const failedKeys = logsStateRef.current
                 .filter(log =>
@@ -414,7 +432,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             ])];
             selectedRowKeysRef.current = nextSelectedKeys;
             _setSelectedRowKeys(nextSelectedKeys);
-            startTransfer(TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS, {
+            return startTransfer(TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS, {
                 resetSpecialAttempts: true,
                 failedTypes: {
                     system: resumeSystem,
@@ -422,6 +440,8 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 }
             });
         }
+
+        return Promise.resolve(false);
     };
 
     const getExecutableRows = (scope = TRANSFER_EXECUTION_SCOPE.PENDING) => logsStateRef.current.filter(log => {
@@ -521,7 +541,9 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             }
         }
 
-        const isResuming = (isPausedRef.current || isPaused) && logSessionInitializedRef.current;
+        const isResuming = options.continueExistingRun === true || (
+            (isPausedRef.current || isPaused) && logSessionInitializedRef.current
+        );
         const isRetryContext = scope === TRANSFER_EXECUTION_SCOPE.RETRY;
         const includesFailedRows = scope === TRANSFER_EXECUTION_SCOPE.PENDING_AND_ERRORS;
         if (includesFailedRows && options.failedTypes) {
@@ -538,7 +560,11 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         wasRetryContextRef.current = isRetryContext;
         setIsRetryMode(isRetryContext);
 
-        const pendingRows = getExecutableRows(scope);
+        // One queue entry represents one complete row job. De-duplicate by row
+        // key so the same row can never be assigned to two worker slots.
+        const pendingRows = [...new Map(
+            getExecutableRows(scope).map(log => [String(log.key), log])
+        ).values()];
 
         if (pendingRows.length === 0) {
             if (isResuming) {
@@ -840,6 +866,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             let nextRowIndex = 0;
             let activeWorkerCount = 0;
             let settled = false;
+            const inFlightRowKeys = new Set();
 
             const finishScheduler = () => {
                 if (settled) return;
@@ -868,6 +895,13 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                 ) {
                     const currentLog = pendingRows[nextRowIndex];
                     nextRowIndex += 1;
+                    const rowKey = String(currentLog.key);
+                    if (inFlightRowKeys.has(rowKey)) {
+                        console.error(`Duplicate worker assignment prevented for row ${rowKey}.`);
+                        continue;
+                    }
+
+                    inFlightRowKeys.add(rowKey);
                     activeWorkerCount += 1;
 
                     Promise.resolve()
@@ -877,6 +911,7 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                             requestAutoPauseForConnectivity(error.message);
                         })
                         .finally(() => {
+                            inFlightRowKeys.delete(rowKey);
                             activeWorkerCount -= 1;
                             pumpScheduler();
                         });
@@ -892,9 +927,6 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         });
 
         refreshExecutionState(true);
-        setLoading(false);
-        if (onStatusChange) onStatusChange(false);
-
         const wasStopped = isStoppingRef.current;
         const wasPaused = isPausingRef.current;
         setIsStopping(false);
@@ -904,10 +936,29 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
         isRunning.current = false;
 
         if (wasPaused) {
-            const remainingRows = getExecutableRows(scope);
+            let resumeScope = scope;
+            let remainingRows = getExecutableRows(scope);
+
+            // Retry may finish just as Pause is requested. Pending rows still
+            // belong to the same transfer and must remain resumable.
+            if (isRetryContext && remainingRows.length === 0) {
+                const pendingRowsAfterRetry = getExecutableRows(TRANSFER_EXECUTION_SCOPE.PENDING);
+                if (pendingRowsAfterRetry.length > 0) {
+                    resumeScope = TRANSFER_EXECUTION_SCOPE.PENDING;
+                    remainingRows = pendingRowsAfterRetry;
+                    executionScopeRef.current = resumeScope;
+                    attemptedSpecialScopeKeysRef.current = new Set();
+                    updateRetryState({ isRetrying: false });
+                    wasRetryContextRef.current = false;
+                    setIsRetryMode(false);
+                }
+            }
+
             const canResume = remainingRows.length > 0;
 
             if (canResume) {
+                setLoading(false);
+                if (onStatusChange) onStatusChange(false);
                 const pausedAt = Date.now();
                 executionTimingRef.current.pausedAt = pausedAt;
                 setExecutionTiming(prev => ({
@@ -925,12 +976,16 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
                     message.success('Transfer paused successfully.');
                 }
             } else {
+                setLoading(false);
+                if (onStatusChange) onStatusChange(false);
                 finishTransfer();
                 wasRetryContextRef.current = false;
                 setIsRetryMode(false);
                 message.info('Transfer completed before pause. No rows left to resume.');
             }
         } else if (wasStopped) {
+            setLoading(false);
+            if (onStatusChange) onStatusChange(false);
             finishTransfer(true);
             executionScopeRef.current = TRANSFER_EXECUTION_SCOPE.PENDING;
             attemptedSpecialScopeKeysRef.current = new Set();
@@ -938,6 +993,22 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
             setIsRetryMode(false);
             message.warning('Transfer stopped completely. Use Restart from Scratch to begin again.');
         } else {
+            if (isRetryContext) {
+                const pendingRowsAfterRetry = getExecutableRows(TRANSFER_EXECUTION_SCOPE.PENDING);
+                if (pendingRowsAfterRetry.length > 0) {
+                    updateRetryState({ isRetrying: false });
+                    wasRetryContextRef.current = false;
+                    setIsRetryMode(false);
+                    message.info(`Failed-row retry completed. Continuing with ${pendingRowsAfterRetry.length} pending row(s).`);
+                    await startTransfer(TRANSFER_EXECUTION_SCOPE.PENDING, {
+                        continueExistingRun: true
+                    });
+                    return;
+                }
+            }
+
+            setLoading(false);
+            if (onStatusChange) onStatusChange(false);
             finishTransfer();
             message.success('Transfer process completed successfully.');
 
@@ -1019,18 +1090,22 @@ export const useTransferExecution = (definitionData, onStatusChange) => {
 
         if (retryKeys.length === 0) {
             message.warning('No matching errors to retry.');
-            return;
+            return Promise.resolve(false);
         }
 
-        // Update selection without touching row statuses — table stays intact
-        selectedRowKeysRef.current = retryKeys;
-        setSelectedRowKeys(retryKeys);
+        // Preserve the original transfer selection so its successful and pending
+        // rows do not disappear from the summary. Add matching failures only when
+        // they were not already selected.
+        const nextSelectedKeys = [...new Set([
+            ...selectedRowKeysRef.current,
+            ...retryKeys
+        ])];
+        selectedRowKeysRef.current = nextSelectedKeys;
+        setSelectedRowKeys(nextSelectedKeys);
         setIsComplete(false);
         updateRetryState({ isRetrying: true, total: retryKeys.length, processed: 0 });
 
-        setTimeout(() => {
-            startTransfer(TRANSFER_EXECUTION_SCOPE.RETRY);
-        }, 150);
+        return startTransfer(TRANSFER_EXECUTION_SCOPE.RETRY);
     };
 
     const getLogDetailsAsync = async (key) => {

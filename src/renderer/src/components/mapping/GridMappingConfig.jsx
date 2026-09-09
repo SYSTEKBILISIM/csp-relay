@@ -85,6 +85,7 @@ export const GridMappingConfig = ({
         setApiStep(0);
         columnForm.setFieldsValue({
             isArray: false,
+            ...(columnData.type === 'RelatedDocument' ? { relatedDocumentSource: 'MainSheet' } : {}),
             ...mapping,
             cacheApiResponse: mapping.cacheApiResponse !== false,
             skipIfDuplicate: mapping.skipIfDuplicate === true || columnData.skipIfDuplicate === true,
@@ -391,12 +392,25 @@ export const GridMappingConfig = ({
                                                     ? <Tag color="purple" style={{ margin: 0 }}>Grid Configured</Tag>
                                                     : <Tag color="warning" style={{ margin: 0 }}>Grid Setup Needed</Tag>;
                                             } else if (colData.type === 'RelatedDocument') {
-                                                summaryNode = mapping.pathCol
+                                                const usesRelatedSheet = mapping.relatedDocumentSource === 'RelatedSheet';
+                                                const isConfigured = mapping.pathCol && (
+                                                    !usesRelatedSheet || (mapping.relatedSheet && mapping.masterKey && mapping.detailKey)
+                                                );
+                                                summaryNode = isConfigured
                                                     ? (
-                                                        <Tooltip title={`File: ${mapping.pathCol}${mapping.savePathCol ? ` | Save Path: ${mapping.savePathCol}` : ''}`} mouseEnterDelay={0.3}>
+                                                        <Tooltip
+                                                            title={usesRelatedSheet
+                                                                ? `Sheet: ${mapping.relatedSheet} | ${mapping.masterKey} = ${mapping.detailKey} | File: ${mapping.pathCol}${mapping.savePathCol ? ` | Save Path: ${mapping.savePathCol}` : ''}`
+                                                                : `File: ${mapping.pathCol}${mapping.savePathCol ? ` | Save Path: ${mapping.savePathCol}` : ''}`
+                                                            }
+                                                            mouseEnterDelay={0.3}
+                                                        >
                                                             <Tag color="purple" style={{ margin: 0 }}>
                                                                 <span style={{ maxWidth: '150px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'inline-block', verticalAlign: 'bottom' }}>
-                                                                    File: {mapping.pathCol}{mapping.savePathCol ? ` / Path: ${mapping.savePathCol}` : ''}
+                                                                    {usesRelatedSheet
+                                                                        ? `${mapping.relatedSheet}: ${mapping.detailKey} / ${mapping.pathCol}`
+                                                                        : `File: ${mapping.pathCol}${mapping.savePathCol ? ` / Path: ${mapping.savePathCol}` : ''}`
+                                                                    }
                                                                 </span>
                                                             </Tag>
                                                         </Tooltip>
@@ -458,8 +472,13 @@ export const GridMappingConfig = ({
                                 render: (_, field) => {
                                     const colData = form.getFieldValue(['gridColumns', field.name]) || {};
                                     const mapping = colData.mapping || {};
+                                    const relatedDocumentConfigured = mapping.pathCol && (
+                                        mapping.relatedDocumentSource !== 'RelatedSheet' || (
+                                            mapping.relatedSheet && mapping.masterKey && mapping.detailKey
+                                        )
+                                    );
                                     const hasMapping = mapping && (
-                                        (colData.type === 'RelatedDocument' && mapping.pathCol) ||
+                                        (colData.type === 'RelatedDocument' && relatedDocumentConfigured) ||
                                         ((colData.type === 'InlineGrid' || colData.type === 'RelatedGrid') && mapping.gridColumns?.length > 0) ||
                                         (mapping.source === 'API' && mapping.apiUrl) ||
                                         (mapping.source === 'Fixed' && mapping.fixedValue) ||
@@ -693,13 +712,19 @@ export const GridMappingConfig = ({
                         }
 
                         if (currentInnerType === 'RelatedDocument') {
+                            const gridSheet = form.getFieldValue('gridSheet');
+                            const gridSheetColumns = gridSheet ? (sheetColumns[gridSheet] || []) : excelColumns;
+                            const inferredGridIdColumn = gridSheetColumns.find(column => (
+                                String(column || '').trim().toLocaleLowerCase('en-US') === 'id'
+                            ));
+
                             return (
                                 <RelatedDocumentConfig
                                     form={columnForm}
-                                    excelColumns={(() => {
-                                        const gs = form.getFieldValue('gridSheet');
-                                        return gs ? (sheetColumns[gs] || []) : excelColumns;
-                                    })()}
+                                    excelColumns={gridSheetColumns}
+                                    sheetColumns={sheetColumns}
+                                    mainSheet={gridSheet}
+                                    mainIdColumn={inferredGridIdColumn}
                                 />
                             );
                         }
